@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -216,6 +217,11 @@ func drainClose(body io.ReadCloser) {
 	_ = body.Close()
 }
 
+// closeQuietly closes something that was only read from: a response body, a
+// file opened for reading. Nothing written can be lost, so the error of
+// Close carries no information.
+func closeQuietly(c io.Closer) { _ = c.Close() }
+
 // firstError records the first error reported to it. It is safe for
 // concurrent use: the transport may still read a request body after Do
 // returns.
@@ -334,21 +340,116 @@ func readExactly(r io.Reader, size int64) ([]byte, error) {
 	return data, nil
 }
 
-// writeFileAtomic writes a file through fill without ever leaving a partial
-// file at path: the content goes to a temporary file in the same directory
-// (created along with any missing parents), which is synced and renamed
-// over path only when fill succeeds. An existing file's permissions are
-// kept; a new file gets 0666 minus the umask.
-func writeFileAtomic(path string, fill func(w io.Writer) error) (err error) {
+// renameFile is os.Rename; tests replace it to simulate a file that cannot
+// be replaced.
+var renameFile = os.Rename
+
+// maxLinks bounds the chain of symbolic links resolveLink follows, as
+// filepath.EvalSymlinks bounds it.
+const maxLinks = 255
+
+// stagingBaseMax is how many bytes of the target's name a staging file's
+// name keeps. The staging name adds up to 19 bytes, and file systems cap a
+// name at 255 bytes, so it fits wherever the target's own name does.
+const stagingBaseMax = 200
+
+// writeFileAtomic writes the file at path through fill, as
+// FileStore.GetToFile describes: the parent directories of path are
+// created, and path is reached as open(2) reaches it, following symbolic
+// links. A regular file, or one that does not exist yet, is staged and
+// renamed into place by replaceFile, so a failing fill leaves it as it was.
+// Anything else (a FIFO, a device) cannot be replaced by a rename and is
+// written in place.
+func writeFileAtomic(path string, fill func(w io.Writer) error) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(abs)
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o777); err != nil {
 		return err
 	}
-	tmp, err := createTemp(dir, filepath.Base(abs))
+	fi, err := os.Stat(abs) // follows the links, as open(2) does
+	switch {
+	case err == nil && !fi.Mode().IsRegular():
+		return writeInPlace(abs, fill)
+	case errors.Is(err, os.ErrNotExist):
+		fi = nil // to be created: abs is missing, or a link that dangles
+	case err != nil:
+		return err
+	}
+	dst, err := resolveLink(abs)
+	if err != nil {
+		return err
+	}
+	return replaceFile(dst, fi, fill)
+}
+
+// resolveLink returns the file that the chain of symbolic links starting at
+// path ends at, or path itself when it is not a link. The file need not
+// exist: the last link may dangle.
+func resolveLink(path string) (string, error) {
+	p := path
+	for range maxLinks {
+		fi, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return p, nil // to be created
+		case err != nil:
+			return "", err
+		case fi.Mode()&os.ModeSymlink == 0:
+			return p, nil
+		}
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", err
+		}
+		if p, err = linkDestination(p, target); err != nil {
+			return "", err
+		}
+	}
+	return "", &os.PathError{Op: "open", Path: path, Err: syscall.ELOOP}
+}
+
+// linkDestination returns the file that the symbolic link at p, whose
+// content is target, points to. Its directory part is resolved the way the
+// kernel resolves it: a relative target from the directory holding the
+// link, and each ".." after the links before it.
+func linkDestination(p, target string) (string, error) {
+	switch {
+	case filepath.IsAbs(target):
+	case target != "" && os.IsPathSeparator(target[0]):
+		// Rooted on p's volume (Windows: \dir\file).
+		target = filepath.VolumeName(p) + target
+	default:
+		// Not filepath.Join: its lexical Clean would apply a ".." in target
+		// before the links leading up to it are resolved.
+		target = filepath.Dir(p) + string(filepath.Separator) + target
+	}
+	i := len(target)
+	for i > 0 && !os.IsPathSeparator(target[i-1]) {
+		i--
+	}
+	dir, name := target[:i], target[i:]
+	if name == "" || name == "." || name == ".." {
+		return "", &os.PathError{Op: "open", Path: p, Err: syscall.EISDIR}
+	}
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// replaceFile writes dst through fill to a new staging file in dst's
+// directory, which is synced and renamed over dst only once fill has
+// succeeded. fi describes the existing dst (nil when there is none): its
+// permission bits are kept, and a new file gets 0666 minus the umask.
+//
+// Where dst is a mount point (a single file bind-mounted into a container),
+// rename fails with EBUSY: the complete staging file is then copied into dst
+// instead.
+func replaceFile(dst string, fi os.FileInfo, fill func(w io.Writer) error) (err error) {
+	tmp, err := createTemp(filepath.Dir(dst), filepath.Base(dst))
 	if err != nil {
 		return err
 	}
@@ -358,7 +459,7 @@ func writeFileAtomic(path string, fill func(w io.Writer) error) (err error) {
 			_ = os.Remove(tmp.Name())
 		}
 	}()
-	if fi, statErr := os.Stat(abs); statErr == nil && fi.Mode().IsRegular() {
+	if fi != nil {
 		if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
 			return err
 		}
@@ -372,15 +473,63 @@ func writeFileAtomic(path string, fill func(w io.Writer) error) (err error) {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), abs)
+	if err := renameFile(tmp.Name(), dst); !errors.Is(err, syscall.EBUSY) {
+		return err
+	}
+	if err := copyFile(dst, tmp.Name()); err != nil {
+		return err
+	}
+	// dst is complete: a staging file that cannot be removed is no reason to
+	// report the download as failed.
+	_ = os.Remove(tmp.Name())
+	return nil
 }
 
-// createTemp creates a new, hidden temporary file next to the target base
-// name. Unlike os.CreateTemp it creates the file with mode 0666 (before the
-// umask), because the file becomes the final download.
+// copyFile overwrites the existing file dst, in place, with the content of
+// the file src.
+func copyFile(dst, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer closeQuietly(in)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, in)
+	if err == nil {
+		err = out.Sync()
+	}
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// writeInPlace writes the file at path through fill directly, as Python's
+// open(path, "wb") does, following symbolic links: for targets a rename
+// cannot replace, such as a FIFO or a device.
+func writeInPlace(path string, fill func(w io.Writer) error) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return err
+	}
+	err = fill(f)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// createTemp creates a new, hidden staging file in dir for the target name
+// base: "." + base + "." + random + ".tmp", keeping at most stagingBaseMax
+// bytes of base. Unlike os.CreateTemp it creates the file with mode 0666
+// (before the umask), because the file becomes the final download.
 func createTemp(dir, base string) (*os.File, error) {
+	prefix := "." + truncateBytes(base, stagingBaseMax) + "."
 	for range 100 {
-		name := filepath.Join(dir, "."+base+"."+strconv.FormatUint(rand.Uint64(), 36)+".tmp")
+		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36)+".tmp")
 		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
 		if errors.Is(err, os.ErrExist) {
 			continue
@@ -388,4 +537,19 @@ func createTemp(dir, base string) (*os.File, error) {
 		return f, err
 	}
 	return nil, fmt.Errorf("filestore: could not create a temporary file in %s", dir)
+}
+
+// truncateBytes returns s cut to at most n bytes, at a character boundary
+// when s is valid UTF-8.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// s[n] starts a character, or continues one that began at most
+	// utf8.UTFMax-1 bytes earlier.
+	i, low := n, max(n-(utf8.UTFMax-1), 0)
+	for i > low && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i]
 }

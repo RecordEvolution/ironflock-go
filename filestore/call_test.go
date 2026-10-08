@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -18,7 +19,8 @@ func TestEnvelopeFailuresAreTypedCodes(t *testing.T) {
 	fs, _ := newStore(t, map[string]any{URIStat: fail(CodeNoSuchObject, "dataplane: no such object")})
 
 	_, err := fs.Stat(ctx, "nope", Namespace("frames"))
-	fe := wantError(t, err, CodeNoSuchObject, "dataplane: no such object")
+	wantError(t, err, CodeNoSuchObject, "dataplane: no such object")
+	fe := fileError(t, err)
 	if got, want := fe.Error(), "NO_SUCH_OBJECT: dataplane: no such object"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
@@ -49,7 +51,8 @@ func TestEnvelopeDefaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs, _ := newStore(t, map[string]any{URIUsage: tc.reply})
 			_, err := fs.Usage(ctx)
-			fe := wantError(t, err, tc.wantCode, "")
+			wantError(t, err, tc.wantCode, "")
+			fe := fileError(t, err)
 			if fe.Reason != tc.wantReason {
 				t.Errorf("reason = %q, want %q", fe.Reason, tc.wantReason)
 			}
@@ -135,6 +138,9 @@ func TestWampErrorMapping(t *testing.T) {
 			`wamp.error.authorization_failed: "first"`},
 		{wamp.URIAuthenticationFailed, []any{int64(3)}, CodeNotAuthorized,
 			"wamp.error.authentication_failed: 3"},
+		// JSON cannot encode NaN: the detail falls back to %v.
+		{wamp.URINotAuthorized, []any{math.NaN(), "x"}, CodeNotAuthorized,
+			"wamp.error.not_authorized: NaN"},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s/%d", tc.uri, len(tc.args)), func(t *testing.T) {

@@ -56,14 +56,25 @@ type Caller interface {
 }
 
 // FileStore is the app's managed object storage. It is safe for concurrent
-// use. Construction does no I/O; every call waits for the connection's
-// session like the table API does.
+// use. Construction does no I/O.
+//
+// Each file service call goes through the Caller without a retry window: it
+// waits for a session only as long as the Caller does by default (for a
+// *wamp.Connection, its session wait timeout, 10 s unless configured
+// otherwise) and is not retried. Unlike table operations, file calls do not
+// use the reconnect window, so they do not ride out a platform restart:
+// until the file service has registered again, a call fails with
+// CodeNotAvailable. How calls made before ironflock.IronFlock.Start behave
+// is described at ironflock.IronFlock.Files.
 //
 // Create one with New (or obtain it from ironflock.IronFlock.Files); the
 // zero value is not usable.
 type FileStore struct {
 	caller Caller
 	http   *http.Client
+	// ownsHTTP is set when New created http, which CloseIdleConnections may
+	// then close.
+	ownsHTTP bool
 
 	// catalog caches the catalog once fetched; it is replaced, never
 	// mutated.
@@ -75,17 +86,38 @@ type FileStore struct {
 }
 
 // New returns a FileStore that calls the file service through caller.
-// httpClient is used for direct (presigned) transfers; nil uses a client
-// that honours HTTP(S)_PROXY and has no overall timeout (transfers are
-// bounded by the context instead).
+//
+// httpClient is used for direct (presigned) transfers. With nil the store
+// creates a client of its own, which honours HTTP(S)_PROXY and has no
+// overall timeout (transfers are bounded by the context instead); release
+// its pooled connections with CloseIdleConnections once the store is no
+// longer used.
 func New(caller Caller, httpClient *http.Client) *FileStore {
-	if httpClient == nil {
-		httpClient = defaultHTTPClient()
-	}
-	return &FileStore{
+	s := &FileStore{
 		caller:     caller,
 		http:       httpClient,
 		catalogSem: make(chan struct{}, 1),
+	}
+	if httpClient == nil {
+		s.http, s.ownsHTTP = defaultHTTPClient(), true
+	}
+	return s
+}
+
+// CloseIdleConnections closes the keep-alive connections that the store's
+// own HTTP client (the one New creates when given none) holds idle after
+// direct transfers, releasing their sockets and goroutines, which would
+// otherwise linger for up to 90 s. Transfers in progress are not
+// interrupted, but their connections return to the pool when they end, so
+// call it once the store's calls have returned. The store stays usable: a
+// later transfer opens a new connection.
+//
+// It does nothing for a client passed to New, which belongs to the caller
+// and may be shared. ironflock.IronFlock.Stop calls it for the store that
+// Files returns.
+func (s *FileStore) CloseIdleConnections() {
+	if s.ownsHTTP {
+		s.http.CloseIdleConnections()
 	}
 }
 
@@ -390,7 +422,7 @@ func (s *FileStore) Get(ctx context.Context, key string, opts ...Option) ([]byte
 	if body == nil {
 		return data, nil
 	}
-	defer body.Close()
+	defer closeQuietly(body)
 	data, err = io.ReadAll(body)
 	if err != nil {
 		return nil, readError(ctx, err)
@@ -418,7 +450,7 @@ func (s *FileStore) GetTo(ctx context.Context, key string, w io.Writer, opts ...
 		}
 		return s.withURL(ctx, p)
 	}
-	defer body.Close()
+	defer closeQuietly(body)
 	if err := copyDownload(ctx, w, body); err != nil {
 		return nil, err
 	}
@@ -431,7 +463,21 @@ func (s *FileStore) GetTo(ctx context.Context, key string, w io.Writer, opts ...
 // The file is written under a temporary name in the same directory and
 // renamed into place only once complete, so a failed or cancelled download
 // never leaves a partial file at path (and keeps a previous file there
-// intact).
+// intact). A replaced file's permission bits are kept. Because the file is
+// replaced rather than rewritten, its directory must be writable (the file
+// itself need not be), and other hard links to the old file keep the old
+// content.
+//
+// Symbolic links are followed, as Python's open(path, "wb") follows them:
+// the file at the end of the links is written (created when the last link
+// dangles) and staged in its own directory, and the links stay. Targets a
+// rename cannot replace are written in place instead:
+//   - a FIFO or a device (/dev/stdout, for instance, when it is a terminal
+//     or a pipe) is opened and written as the object streams in;
+//   - a file that is a mount point (a single file bind-mounted into a
+//     container, which rename refuses with EBUSY) is overwritten with the
+//     staged download once it is complete; only a failure during that copy
+//     can leave it partly written.
 func (s *FileStore) GetToFile(ctx context.Context, key, path string, opts ...Option) (*ObjectInfo, error) {
 	namespace := collect(opts).ns()
 	p, data, body, err := s.fetch(ctx, key, namespace)
@@ -448,7 +494,7 @@ func (s *FileStore) GetToFile(ctx context.Context, key, path string, opts ...Opt
 		}
 		return s.withURL(ctx, p)
 	}
-	defer body.Close()
+	defer closeQuietly(body)
 	var copyErr error
 	err = writeFileAtomic(path, func(w io.Writer) error {
 		copyErr = copyDownload(ctx, w, body)
@@ -560,7 +606,7 @@ func (s *FileStore) PutFile(ctx context.Context, key, path string, opts ...Optio
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer closeQuietly(f)
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err

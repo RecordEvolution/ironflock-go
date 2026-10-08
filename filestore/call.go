@@ -1,12 +1,11 @@
 package filestore
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
@@ -80,7 +79,8 @@ func (s *FileStore) call(ctx context.Context, uri string, payload map[string]any
 // mapWampError maps a router-level rejection (a *wamp.Error anywhere
 // in err's chain) with one of the URIs in wampErrorCodes to an *Error, or
 // returns nil when err is not such a rejection (or is already an *Error).
-// The reason carries the first error argument, JSON-encoded, as detail.
+// The reason carries the first error argument as detail, in compact JSON
+// like JavaScript's JSON.stringify (no HTML escaping).
 func mapWampError(err error) *Error {
 	var fe *Error
 	if errors.As(err, &fe) {
@@ -96,22 +96,10 @@ func mapWampError(err error) *Error {
 	}
 	detail := ""
 	if len(we.Args) > 0 {
-		detail = ": " + jsonDetail(we.Args[0])
+		detail = ": " + jsontext.Compact(we.Args[0])
 	}
 	if code == CodeNotAvailable {
 		return wrapError(code, "the file service is not available on this deployment"+detail, err)
 	}
 	return wrapError(code, we.URI+detail, err)
-}
-
-// jsonDetail renders v as compact JSON (like JavaScript's JSON.stringify:
-// no HTML escaping), falling back to %v for values JSON cannot encode.
-func jsonDetail(v any) string {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return fmt.Sprintf("%v", v)
-	}
-	return string(bytes.TrimRight(buf.Bytes(), "\n"))
 }

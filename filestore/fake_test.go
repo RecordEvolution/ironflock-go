@@ -181,7 +181,8 @@ func newStore(t *testing.T, replies map[string]any) (*FileStore, *fakeCaller) {
 	maps.Copy(all, replies)
 	fc := newFakeCaller(all)
 	fs := New(fc, nil)
-	t.Cleanup(fs.http.CloseIdleConnections)
+	// What IronFlock.Stop does for the store Files returns.
+	t.Cleanup(fs.CloseIdleConnections)
 	return fs, fc
 }
 
@@ -197,7 +198,7 @@ func fileError(t *testing.T, err error) *Error {
 
 // wantError asserts err is an *Error with code and, when reason is not "",
 // that reason.
-func wantError(t *testing.T, err error, code, reason string) *Error {
+func wantError(t *testing.T, err error, code, reason string) {
 	t.Helper()
 	fe := fileError(t, err)
 	if fe.Code != code {
@@ -206,7 +207,19 @@ func wantError(t *testing.T, err error, code, reason string) *Error {
 	if reason != "" && fe.Reason != reason {
 		t.Fatalf("reason = %q, want %q", fe.Reason, reason)
 	}
-	return fe
+}
+
+// eventually polls cond until it holds or 5 s have passed, and reports
+// whether it held.
+func eventually(cond func() bool) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
 
 // --- fake object store -------------------------------------------------------
