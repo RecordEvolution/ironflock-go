@@ -8,7 +8,7 @@ import (
 )
 
 func TestQueryWireMinimal(t *testing.T) {
-	got, err := queryWire(&TableQueryParams{Limit: 10}, MaxQueryLimit)
+	got, err := queryWire(&TableQueryParams{Limit: 10}, MaxQueryLimit, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestQueryWireFull(t *testing.T) {
 		},
 		Columns: []string{"temperature"},
 	}
-	got, err := queryWire(q, MaxQueryLimit)
+	got, err := queryWire(q, MaxQueryLimit, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +71,11 @@ func TestQueryWireRejects(t *testing.T) {
 		"empty group":        {Limit: 1, FilterAnd: []Filter{Or()}},
 	}
 	for name, q := range cases {
-		if _, err := queryWire(q, MaxQueryLimit); !errors.Is(err, ErrInvalidArgument) {
+		if _, err := queryWire(q, MaxQueryLimit, nil); !errors.Is(err, ErrInvalidArgument) {
 			t.Errorf("%s: want ErrInvalidArgument, got %v", name, err)
 		}
 	}
-	if _, err := queryWire(&TableQueryParams{Limit: 101}, MaxSecretLimit); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := queryWire(&TableQueryParams{Limit: 101}, MaxSecretLimit, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("secret limit: want ErrInvalidArgument, got %v", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestTimeRangeForms(t *testing.T) {
 	if !reflect.DeepEqual(got, []any{"2026-01-02T02:04:05Z", nil}) {
 		t.Fatalf("got %#v", got)
 	}
-	got, err = timeRangeWire(&TimeRange{Start: 1700000000000, End: int64(1700000001000)})
+	got, err = timeRangeWire(&TimeRange{Start: int64(1700000000000), End: uint64(1700000001000)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestSeriesWire(t *testing.T) {
 		Limit:     500,
 		TimeRange: &TimeRange{Start: "2026-01-01T00:00:00Z", End: "2026-03-01T00:00:00Z"},
 		GroupBy:   []string{"device_id"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestSeriesWire(t *testing.T) {
 		{Metrics: []string{"a"}, Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}, FilterAnd: []Filter{Or(IsNull("a"))}},
 	}
 	for i, p := range bad {
-		if _, err := seriesWire(&p); !errors.Is(err, ErrInvalidArgument) {
+		if _, err := seriesWire(&p, nil); !errors.Is(err, ErrInvalidArgument) {
 			t.Errorf("case %d: want ErrInvalidArgument, got %v", i, err)
 		}
 	}
@@ -189,5 +189,31 @@ func TestNormalizeRows(t *testing.T) {
 	}
 	if _, err := normalizeRows([]map[string]any{{"a": 1}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTimeRangeHelpers(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	cases := []struct {
+		tr   *TimeRange
+		want []any
+	}{
+		{Between(start, end), []any{"2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z"}},
+		{Since(start), []any{"2026-01-01T00:00:00Z", nil}},
+		{Until(end), []any{nil, "2026-01-01T01:00:00Z"}},
+		{&TimeRange{Start: &start, End: (*time.Time)(nil)}, []any{"2026-01-01T00:00:00Z", nil}},
+		{&TimeRange{}, []any{nil, nil}},
+	}
+	for i, tc := range cases {
+		got, err := timeRangeWire(tc.tr)
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("case %d: %#v, %v", i, got, err)
+		}
+	}
+	for _, bad := range []any{true, []string{"2026-01-01"}, struct{}{}} {
+		if _, err := timeRangeWire(&TimeRange{Start: bad}); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%#v: %v", bad, err)
+		}
 	}
 }

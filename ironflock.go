@@ -30,8 +30,15 @@ package ironflock
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/RecordEvolution/ironflock-go/crossbar"
@@ -69,6 +76,16 @@ const ErrorLogsTable = "error-logs"
 // DefaultReconnectWindow is how long a table operation rides out a platform
 // restart by default (see WithReconnectWindow).
 const DefaultReconnectWindow = 60 * time.Second
+
+// Shutdown budgets.
+const (
+	// defaultRunStopTimeout bounds the Stop that Run performs on shutdown.
+	defaultRunStopTimeout = 10 * time.Second
+	// defaultCleanupTimeout bounds tearing down what a failed or abandoned
+	// operation left behind (a consumed-app connection whose open failed, a
+	// half-made table subscription).
+	defaultCleanupTimeout = 5 * time.Second
+)
 
 // Option configures New.
 type Option func(*config)
@@ -187,6 +204,17 @@ type IronFlock struct {
 	stopped    bool
 	files      *filestore.FileStore
 	consumed   map[string]*consumedEntry
+	// stopDone is closed when the first Stop has finished; nil before it.
+	stopDone chan struct{}
+
+	// openCtx is the context consumed-app opens run on: detached from the
+	// callers that share an open (one caller giving up must not fail it for
+	// the others), cancelled by Stop.
+	openCtx    context.Context
+	openCancel context.CancelFunc
+
+	runStopTimeout time.Duration
+	cleanupTimeout time.Duration
 }
 
 // New creates an IronFlock instance from the environment the device agent
@@ -196,7 +224,98 @@ type IronFlock struct {
 // number is available; other missing variables are logged as a warning and
 // fail the operations that need them.
 func New(opts ...Option) (*IronFlock, error) {
-	panic("TODO: implement")
+	return newWithConn(crossbar.NewConnection(), func() wampConn { return crossbar.NewConnection() }, opts...)
+}
+
+// newWithConn is New with the own connection and the factory of consumed-app
+// connections injected.
+func newWithConn(conn wampConn, newConn func() wampConn, opts ...Option) (*IronFlock, error) {
+	c := config{reconnectWindow: DefaultReconnectWindow}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&c)
+		}
+	}
+	log := c.logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	serial, err := crossbar.SerialNumber(c.serialNumber)
+	if err != nil {
+		return nil, missingConfigf("%v", err)
+	}
+	if (c.authID == "") != (c.authSecret == "") {
+		return nil, invalidf("WithCredentials needs both an auth id and a secret")
+	}
+
+	f := &IronFlock{
+		log:             log,
+		serialNumber:    serial,
+		deviceName:      stringSetting(c.deviceName, "DEVICE_NAME"),
+		deviceKey:       stringSetting(c.deviceKey, "DEVICE_KEY"),
+		appName:         stringSetting(c.appName, "APP_NAME"),
+		swarmKey:        keySetting(log, c.swarmKey, "SWARM_KEY"),
+		appKey:          keySetting(log, c.appKey, "APP_KEY"),
+		stage:           crossbar.StageFromEnv(stringSetting(c.env, "ENV")),
+		reswarmURL:      c.reswarmURL,
+		url:             c.url,
+		authID:          c.authID,
+		authSecret:      c.authSecret,
+		reconnectWindow: max(c.reconnectWindow, 0),
+		conn:            conn,
+		newConn:         newConn,
+		consumed:        make(map[string]*consumedEntry),
+		runStopTimeout:  defaultRunStopTimeout,
+		cleanupTimeout:  defaultCleanupTimeout,
+	}
+	f.openCtx, f.openCancel = context.WithCancel(context.Background())
+
+	var missing []string
+	if f.deviceKey == "" {
+		missing = append(missing, "DEVICE_KEY")
+	}
+	if f.appName == "" {
+		missing = append(missing, "APP_NAME")
+	}
+	if f.swarmKey <= 0 {
+		missing = append(missing, "SWARM_KEY")
+	}
+	if f.appKey <= 0 {
+		missing = append(missing, "APP_KEY")
+	}
+	if len(missing) > 0 {
+		log.Warn("Warning: The following environment variables must be present: " + strings.Join(missing, ", "))
+	}
+	return f, nil
+}
+
+// stringSetting returns the option value when set, else the environment
+// variable name.
+func stringSetting(opt *string, name string) string {
+	if opt != nil {
+		return *opt
+	}
+	return os.Getenv(name)
+}
+
+// keySetting returns the option value when set, else the environment variable
+// name parsed as an integer. Unset means 0; a value that is not an integer is
+// logged and also reads as 0 (unset).
+func keySetting(log *slog.Logger, opt *int, name string) int {
+	if opt != nil {
+		return *opt
+	}
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Warn(fmt.Sprintf("%s=%q is not an integer; treating it as unset", name, raw))
+		return 0
+	}
+	return v
 }
 
 // Connection returns the underlying connection, for advanced use.
@@ -232,20 +351,147 @@ func (f *IronFlock) AppKey() int { return f.appKey }
 // Files returns the app's managed object storage. It is safe to use before
 // Start: every call waits for the connection like the table API does.
 func (f *IronFlock) Files() *filestore.FileStore {
-	panic("TODO: implement")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.files == nil {
+		f.files = filestore.New(f.conn, nil)
+	}
+	return f.files
 }
 
 // Start configures and opens the connection, and blocks until the app's
 // realm is joined or ctx is done. A realm that does not exist yet (the
 // data backend is still being provisioned) is waited for.
+//
+// Start fails at once, with an error wrapping ErrMissingConfig, when
+// SWARM_KEY or APP_KEY is unknown: the realm could never be joined. A
+// failed Start may be retried; Start on a started or stopped IronFlock is
+// an error.
 func (f *IronFlock) Start(ctx context.Context) error {
-	panic("TODO: implement")
+	// The realm realm-<SWARM_KEY>-<APP_KEY>-<stage> can never exist without
+	// both keys, so waiting for it would only hang.
+	if err := f.requireKeys(); err != nil {
+		return err
+	}
+
+	f.mu.Lock()
+	switch {
+	case f.stopped:
+		f.mu.Unlock()
+		return fmt.Errorf("ironflock: Start after Stop: %w", crossbar.ErrStopped)
+	case f.started:
+		f.mu.Unlock()
+		return errors.New("ironflock: Start called while already started")
+	}
+	f.started = true
+	if !f.configured {
+		url, err := f.routerURL()
+		if err == nil {
+			err = f.conn.Configure(crossbar.Config{
+				SwarmKey:     f.swarmKey,
+				AppKey:       f.appKey,
+				Stage:        f.stage,
+				URL:          url,
+				SerialNumber: f.serialNumber,
+				AuthID:       f.authID,
+				AuthSecret:   f.authSecret,
+				Logger:       f.log,
+			})
+		}
+		if err != nil {
+			f.started = false
+			f.mu.Unlock()
+			return err
+		}
+		f.configured = true
+	}
+	f.mu.Unlock()
+
+	if err := f.conn.Start(ctx); err != nil {
+		// A failed Start may be retried.
+		f.mu.Lock()
+		f.started = false
+		f.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// routerURL resolves the router URL: WithURL, else DEVICE_ENDPOINT_URL, else
+// the studio URL (WithReswarmURL / RESWARM_URL), else the public cloud.
+func (f *IronFlock) routerURL() (string, error) {
+	if f.url != "" {
+		return f.url, nil
+	}
+	return crossbar.WebSocketURI(f.reswarmURL)
 }
 
 // Stop closes every consumed-app connection and the connection itself. It
 // is idempotent.
+//
+// Consumed-app connections still opening are aborted. Afterwards
+// operations fail, and ConnectToApp returns an error wrapping
+// crossbar.ErrStopped.
 func (f *IronFlock) Stop(ctx context.Context) error {
-	panic("TODO: implement")
+	f.mu.Lock()
+	if f.stopDone != nil {
+		// Stopped or stopping: wait for the first Stop to finish.
+		done := f.stopDone
+		f.mu.Unlock()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	f.stopDone = done
+	f.stopped = true
+	entries := make([]*consumedEntry, 0, len(f.consumed))
+	for _, e := range f.consumed {
+		entries = append(entries, e)
+	}
+	f.consumed = make(map[string]*consumedEntry)
+	f.mu.Unlock()
+	defer close(done)
+
+	// Abort consumed-app opens still in flight; one that completes anyway
+	// closes its own connection (see runOpen).
+	f.openCancel()
+	f.closeConsumed(ctx, entries)
+	return f.conn.Stop(ctx)
+}
+
+// closeConsumed closes the consumed apps of entries concurrently, waiting for
+// opens still in flight within ctx. Failures are logged.
+func (f *IronFlock) closeConsumed(ctx context.Context, entries []*consumedEntry) {
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// An attempt still in flight when ctx ends closes its own
+			// connection (see runOpen); a finished one is always closed here,
+			// even when ctx has ended already.
+			select {
+			case <-e.done:
+			default:
+				select {
+				case <-e.done:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if e.app == nil {
+				return // the open failed: nothing to close
+			}
+			if err := e.app.close(ctx); err != nil {
+				f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", e.app.App, err))
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // Run starts the connection, runs main, and stops when main returns, ctx is
@@ -253,195 +499,63 @@ func (f *IronFlock) Stop(ctx context.Context) error {
 // until ctx is done or a signal arrives. The context passed to main is
 // cancelled on shutdown. Run returns main's error, or the Start error.
 func (f *IronFlock) Run(ctx context.Context, main func(ctx context.Context) error) error {
-	panic("TODO: implement")
+	runCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	err := f.Start(runCtx)
+	if err == nil {
+		if main != nil {
+			err = main(runCtx)
+		} else {
+			<-runCtx.Done()
+		}
+	}
+
+	// Restore the default signal behavior first, so a second Ctrl-C during
+	// the shutdown below terminates the process.
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), f.runStopTimeout)
+	defer stopCancel()
+	if serr := f.Stop(stopCtx); serr != nil {
+		f.log.Warn(fmt.Sprintf("Stopping the IronFlock connection failed: %v", serr))
+	}
+	return err
 }
 
-// Publish publishes an event to topic. Positional args are sent as WAMP
-// args; a Kwargs value among them as WAMP kwargs. The device metadata
-// (DEVICE_SERIAL_NUMBER, DEVICE_KEY, DEVICE_NAME) is added to the kwargs,
-// user keys winning. The publish is acknowledged: a refusal by the router is
-// returned as an error.
-func (f *IronFlock) Publish(ctx context.Context, topic string, args ...any) error {
-	panic("TODO: implement")
+// requireKeys fails unless SWARM_KEY and APP_KEY are known.
+func (f *IronFlock) requireKeys() error {
+	if f.swarmKey <= 0 {
+		return missingConfigf("SWARM_KEY not set in environment variables!")
+	}
+	if f.appKey <= 0 {
+		return missingConfigf("APP_KEY not set in environment variables!")
+	}
+	return nil
 }
 
-// PublishToTable publishes a row to a fleet table: the table's write topic
-// <SWARM_KEY>.<APP_KEY>.<table>. Fire-and-forget: the acknowledgement
-// confirms delivery to the router, not the database insert.
-//
-//	ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5})
-func (f *IronFlock) PublishToTable(ctx context.Context, table string, args ...any) error {
-	panic("TODO: implement")
+// withDeviceMetadata returns kwargs with the device metadata added under the
+// caller's keys (caller keys win). Unknown values are sent as nil.
+func (f *IronFlock) withDeviceMetadata(kwargs map[string]any) map[string]any {
+	out := make(map[string]any, len(kwargs)+3)
+	out["DEVICE_SERIAL_NUMBER"] = f.serialNumber
+	out["DEVICE_KEY"] = nilIfEmpty(f.deviceKey)
+	out["DEVICE_NAME"] = nilIfEmpty(f.deviceName)
+	for k, v := range kwargs {
+		out[k] = v
+	}
+	return out
 }
 
-// AppendToTable appends a row to a fleet table by calling its append
-// procedure append.<SWARM_KEY>.<APP_KEY>.<table>, and returns the insert
-// outcome.
-func (f *IronFlock) AppendToTable(ctx context.Context, table string, args ...any) (*Result, error) {
-	panic("TODO: implement")
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
-// PublishRowsToTable publishes many rows in a single message (bulk insert)
-// to bulk.<SWARM_KEY>.<APP_KEY>.<table>; the platform inserts the batch
-// atomically. rows is a non-empty slice of rows (Row / map[string]any, or
-// structs encoded via their json tags). kwargs are shared by the batch.
-func (f *IronFlock) PublishRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) error {
-	panic("TODO: implement")
-}
-
-// AppendRowsToTable appends many rows in a single call (bulk insert) to
-// appendBulk.<SWARM_KEY>.<APP_KEY>.<table> and returns the outcome (e.g.
-// {"success": true, "count": N}). All-or-nothing: if any row is invalid,
-// nothing is persisted.
-func (f *IronFlock) AppendRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) (*Result, error) {
-	panic("TODO: implement")
-}
-
-// ErrorLevel is the severity of a reported error.
-type ErrorLevel string
-
-// Error levels.
-const (
-	LevelError ErrorLevel = "error"
-	LevelWarn  ErrorLevel = "warn"
-	LevelInfo  ErrorLevel = "info"
-	LevelDebug ErrorLevel = "debug"
-)
-
-// ReportErrorOptions configures ReportError.
-type ReportErrorOptions struct {
-	// Level defaults to LevelError.
-	Level ErrorLevel
-	// Append uses the append procedure and returns the insert outcome
-	// instead of a fire-and-forget publish.
-	Append bool
-	// Tsp overrides the timestamp (default: now, RFC 3339 UTC).
-	Tsp string
-	// UserMessage is the operator-facing text boards show (default: msg).
-	UserMessage string
-}
-
-// ReportError writes an application error into the data backend's
-// error-logs table, stamped source "app" — queryable with GetHistory and
-// streamed on transformed.error-logs, without firing the platform's
-// system-error toast. errOrMsg is an error (recorded with fmt's %+v, so
-// errors that carry a stack trace include it) or a message string. The
-// Result is nil unless opts.Append is set.
-func (f *IronFlock) ReportError(ctx context.Context, errOrMsg any, opts ...ReportErrorOptions) (*Result, error) {
-	panic("TODO: implement")
-}
-
-// Subscribe subscribes handler to topic. The subscription is restored after
-// every reconnect.
-func (f *IronFlock) Subscribe(ctx context.Context, topic string, handler EventHandler, opts ...SubscribeOptions) (*Subscription, error) {
-	panic("TODO: implement")
-}
-
-// Unsubscribe removes a subscription.
-func (f *IronFlock) Unsubscribe(ctx context.Context, sub *Subscription) error {
-	panic("TODO: implement")
-}
-
-// TableSubscription is the pair of subscriptions behind SubscribeToTable:
-// the table's realtime feed and its bulk counterpart.
-type TableSubscription struct {
-	Rows *Subscription
-	Bulk *Subscription
-	conn wampConn
-}
-
-// Unsubscribe removes both subscriptions.
-func (t *TableSubscription) Unsubscribe(ctx context.Context) error {
-	panic("TODO: implement")
-}
-
-// SubscribeToTable subscribes handler to the stored rows of a table: the
-// data backend's realtime feed transformed.<table> and its bulk counterpart
-// transformed.bulk.<table>. Each event carries one row as stored — typed to
-// the data-template columns, secret columns masked — in Args[0] (see
-// Event.Row); rows of a bulk insert are delivered one event per row.
-func (f *IronFlock) SubscribeToTable(ctx context.Context, table string, handler EventHandler, opts ...SubscribeOptions) (*TableSubscription, error) {
-	panic("TODO: implement")
-}
-
-// Call calls a remote procedure by its full WAMP URI. Positional args are
-// sent as WAMP args; a Kwargs value among them as WAMP kwargs, and a
-// CallOptions value configures the call.
-func (f *IronFlock) Call(ctx context.Context, topic string, args ...any) (*Result, error) {
-	panic("TODO: implement")
-}
-
-// CallDeviceFunction calls a function another device of this app registered
-// with RegisterDeviceFunction: <SWARM_KEY>.<deviceKey>.<APP_KEY>.<STAGE>.<topic>.
-// Arguments as for Call.
-func (f *IronFlock) CallDeviceFunction(ctx context.Context, deviceKey int, topic string, args ...any) (*Result, error) {
-	panic("TODO: implement")
-}
-
-// RegisterDeviceFunction registers handler as a function other devices of
-// this app (and dashboard widget actions) can call:
-// <SWARM_KEY>.<DEVICE_KEY>.<APP_KEY>.<STAGE>.<topic>. The router accepts
-// only this shape and single registrations. The registration is restored
-// after every reconnect.
-func (f *IronFlock) RegisterDeviceFunction(ctx context.Context, topic string, handler InvocationHandler, opts ...RegisterOptions) (*Registration, error) {
-	panic("TODO: implement")
-}
-
-// Register is an alias of RegisterDeviceFunction.
-func (f *IronFlock) Register(ctx context.Context, topic string, handler InvocationHandler, opts ...RegisterOptions) (*Registration, error) {
-	return f.RegisterDeviceFunction(ctx, topic, handler, opts...)
-}
-
-// Unregister removes a registration.
-func (f *IronFlock) Unregister(ctx context.Context, reg *Registration) error {
-	panic("TODO: implement")
-}
-
-// SetDeviceLocation asks the platform to update the device's location.
-//
-// Not served yet: no platform service registers
-// ironflock.location_service.update on the app's realm, so it currently
-// fails with wamp.error.no_such_procedure. Keep locations in a table of your
-// own meanwhile.
-func (f *IronFlock) SetDeviceLocation(ctx context.Context, long, lat float64) (*Result, error) {
-	panic("TODO: implement")
-}
-
-// GetHistory reads rows of a table or transform via
-// history.transformed.<table>. A nil q reads the 10 most recent rows. Secret
-// columns come back as SecretPlaceholder.
-func (f *IronFlock) GetHistory(ctx context.Context, table string, q *TableQueryParams) ([]Row, error) {
-	panic("TODO: implement")
-}
-
-// GetSeriesHistory reads down-sampled time series of a table via
-// history.transformed.series.<table>.
-func (f *IronFlock) GetSeriesHistory(ctx context.Context, table string, q SeriesQueryParams) ([]Row, error) {
-	panic("TODO: implement")
-}
-
-// RevealSecrets reads rows of an own table with its secret columns
-// decrypted, via secret.reveal.<table>. A nil q reads the 10 most recent
-// rows; Limit must be 1-100. Only the app's own containers may call it.
-func (f *IronFlock) RevealSecrets(ctx context.Context, table string, q *TableQueryParams) ([]Row, error) {
-	panic("TODO: implement")
-}
-
-// VerifySecret checks candidate against the secret column of the selected
-// rows without reading it back (secret.verify.<table>); the comparison runs
-// in constant time inside the data backend. A nil q checks the most recent
-// row; Limit must be 1-100. A response of an unexpected shape never reads
-// as a match.
-func (f *IronFlock) VerifySecret(ctx context.Context, table, column, candidate string, q *TableQueryParams) (*SecretVerifyResult, error) {
-	panic("TODO: implement")
-}
-
-// GetRemoteAccessURLForPort returns the public URL of a port declared in
-// the app's port-template.yml, once its tunnel is active. protocol is
-// "http" (default when empty), "https", "tcp" or "udp"; tcp/udp ports need
-// the template's remote_port_environment name. Port values are read live
-// from /data/env, so call it again rather than caching the result. It
-// returns false when the URL cannot be composed.
-func (f *IronFlock) GetRemoteAccessURLForPort(port int, protocol, remotePortEnvironment string) (string, bool) {
-	panic("TODO: implement")
+// cleanupContext returns a context for tearing down what an operation left
+// behind: it keeps ctx's values but not its cancellation (ctx may be the
+// reason for the teardown), bounded by the cleanup budget.
+func (f *IronFlock) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), f.cleanupTimeout)
 }

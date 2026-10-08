@@ -1,0 +1,231 @@
+{
+  "version": 2,
+  "controller": {},
+  "workers": [
+    {
+      "type": "router",
+      "realms": [
+        {
+          "name": "realm-2-26-dev",
+          "roles": [
+            {
+              "name": "device",
+              "permissions": [
+                {
+                  "uri": "",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": true,
+                    "publish": true,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            },
+            {
+              "name": "backend",
+              "permissions": [
+                {
+                  "uri": "",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": true,
+                    "publish": true,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "realm-2-26-prod",
+          "roles": [
+            {
+              "name": "device",
+              "permissions": [
+                {
+                  "uri": "",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": true,
+                    "publish": true,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            },
+            {
+              "name": "backend",
+              "permissions": [
+                {
+                  "uri": "",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": true,
+                    "publish": true,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "realm-2-77-dev",
+          "roles": [
+            {
+              "name": "device",
+              "permissions": [
+                {
+                  "uri": "transformed.",
+                  "match": "prefix",
+                  "allow": {
+                    "call": false,
+                    "register": false,
+                    "publish": false,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                },
+                {
+                  "uri": "history.transformed.",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": false,
+                    "publish": false,
+                    "subscribe": false
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                },
+                {
+                  "uri": "files.read.",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": false,
+                    "publish": false,
+                    "subscribe": false
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                },
+                {
+                  "uri": "wamp.session.get",
+                  "match": "exact",
+                  "allow": {
+                    "call": true,
+                    "register": false,
+                    "publish": false,
+                    "subscribe": false
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            },
+            {
+              "name": "backend",
+              "permissions": [
+                {
+                  "uri": "",
+                  "match": "prefix",
+                  "allow": {
+                    "call": true,
+                    "register": true,
+                    "publish": true,
+                    "subscribe": true
+                  },
+                  "disclose": {
+                    "caller": true,
+                    "publisher": true
+                  },
+                  "cache": true
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "transports": [
+        {
+          "type": "web",
+          "endpoint": {
+            "type": "tcp",
+            "port": 18081
+          },
+          "paths": {
+            "ws-ua-usr": {
+              "type": "websocket",
+              "serializers": [
+                "msgpack",
+                "json"
+              ],
+              "options": {
+                "auto_ping_interval": 0
+              },
+              "auth": {
+                "wampcra": {
+                  "type": "static",
+                  "users": {
+                    "06a0bf96-a539-4d6a-8471-ac7adc67616e": {
+                      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+                      "role": "device"
+                    },
+                    "app-26-per-app": {
+                      "secret": "per-app-secret",
+                      "role": "device"
+                    },
+                    "fake-backend": {
+                      "secret": "fake-backend-secret",
+                      "role": "backend"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

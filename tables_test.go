@@ -1,0 +1,670 @@
+package ironflock
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/RecordEvolution/ironflock-go/crossbar"
+)
+
+var bg = context.Background()
+
+// deviceMetadata is the metadata the standard test identity adds to kwargs.
+func deviceMetadata() map[string]any {
+	return map[string]any{
+		"DEVICE_SERIAL_NUMBER": "test-serial-123",
+		"DEVICE_KEY":           "12",
+		"DEVICE_NAME":          "test-device",
+	}
+}
+
+func withMetadata(kw map[string]any) map[string]any {
+	out := deviceMetadata()
+	for k, v := range kw {
+		out[k] = v
+	}
+	return out
+}
+
+func TestPublishIsAcknowledgedAndCarriesDeviceMetadata(t *testing.T) {
+	f := flock(t)
+	if err := f.Publish(bg, "test.topic", 42, "two"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.own.lastPublish(t)
+	want := fakePublish{
+		Topic:  "test.topic",
+		Args:   []any{int64(42), "two"},
+		Kwargs: deviceMetadata(),
+		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Window: 0, // a plain publish waits the default session timeout
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("published %#v\nwant %#v", got, want)
+	}
+}
+
+func TestPublishUserKwargsWinOverMetadata(t *testing.T) {
+	f := flock(t)
+	if err := f.Publish(bg, "test.topic", Kwargs{"foo": "bar", "DEVICE_KEY": "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.own.lastPublish(t)
+	want := withMetadata(map[string]any{"foo": "bar", "DEVICE_KEY": "mine"})
+	if !reflect.DeepEqual(got.Kwargs, want) {
+		t.Errorf("kwargs %#v, want %#v", got.Kwargs, want)
+	}
+	if got.Args != nil {
+		t.Errorf("args %#v, want none", got.Args)
+	}
+}
+
+func TestPublishSendsUnknownMetadataAsNil(t *testing.T) {
+	setIdentityEnv(t)
+	unsetEnv(t, "DEVICE_KEY", "DEVICE_NAME")
+	f := newTestFlock(t)
+	if err := f.Publish(bg, "test.topic"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"DEVICE_SERIAL_NUMBER": "test-serial-123", "DEVICE_KEY": nil, "DEVICE_NAME": nil}
+	if got := f.own.lastPublish(t).Kwargs; !reflect.DeepEqual(got, want) {
+		t.Errorf("kwargs %#v, want %#v", got, want)
+	}
+}
+
+func TestPublishRejectsInvalidParameters(t *testing.T) {
+	f := flock(t)
+	cases := map[string][]any{
+		"":       {1},
+		"   ":    {1},
+		" x":     {1},
+		"x\n":    {1},
+		"ok":     {func() {}},
+		"ok.opt": {CallOptions{}},
+	}
+	for topic, args := range cases {
+		err := f.Publish(bg, topic, args...)
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("Publish(%q): %v, want ErrInvalidArgument", topic, err)
+			continue
+		}
+		mustContain(t, err.Error(), "Invalid publish parameters")
+	}
+	if n := len(f.own.allPublishes()); n != 0 {
+		t.Errorf("%d invalid publications were sent", n)
+	}
+}
+
+func TestPublishFailuresNameTheTopicAndCause(t *testing.T) {
+	f := flock(t)
+	f.own.publishFn = func(fakePublish) error { return wampErr("wamp.error.not_authorized", "denied") }
+	err := f.Publish(bg, "test.topic", 1)
+	var oerr *OperationError
+	if !errors.As(err, &oerr) {
+		t.Fatalf("err = %T %v", err, err)
+	}
+	if want := `Publish to topic 'test.topic' failed with WAMP error 'wamp.error.not_authorized' — ["denied"]`; err.Error() != want {
+		t.Errorf("message %q\nwant %q", err.Error(), want)
+	}
+	if WampURI(err) != "wamp.error.not_authorized" {
+		t.Errorf("WampURI = %q", WampURI(err))
+	}
+
+	f.own.publishFn = func(fakePublish) error { return errors.New("not connected") }
+	err = f.Publish(bg, "test.topic", 1)
+	if want := "Publish to topic 'test.topic' failed: not connected"; err == nil || err.Error() != want {
+		t.Errorf("message %v, want %q", err, want)
+	}
+
+	f.own.publishFn = func(p fakePublish) error { return context.Canceled }
+	if err := f.Publish(bg, "test.topic"); !errors.Is(err, context.Canceled) {
+		t.Errorf("context error not kept: %v", err)
+	}
+}
+
+func TestPublishToTableTargetsTheTableTopic(t *testing.T) {
+	f := flock(t)
+	if err := f.PublishToTable(bg, "sensordata", Row{"temp": 22}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.own.lastPublish(t)
+	want := fakePublish{
+		Topic:  "10.20.sensordata",
+		Args:   []any{map[string]any{"temp": int64(22)}},
+		Kwargs: deviceMetadata(),
+		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Window: DefaultReconnectWindow,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("published %#v\nwant %#v", got, want)
+	}
+
+	// Kwargs-only rows and a trimmed table name.
+	if err := f.PublishToTable(bg, " inspections ", Kwargs{"part_id": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	got = f.own.lastPublish(t)
+	if got.Topic != "10.20.inspections" || !reflect.DeepEqual(got.Kwargs, withMetadata(map[string]any{"part_id": "1"})) {
+		t.Errorf("published %#v", got)
+	}
+}
+
+func TestTableNameValidation(t *testing.T) {
+	f := flock(t)
+	valid := []string{"sensordata", "error-logs", "sensor_data-2", "tëmperatur", strings.Repeat("a", 100), "-a-"}
+	for _, name := range valid {
+		if err := f.PublishToTable(bg, name, Row{}); err != nil {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	invalid := []string{"", "   ", "bad name!", "a.b", "a/b", "___", "--", strings.Repeat("a", 101)}
+	for _, name := range invalid {
+		err := f.PublishToTable(bg, name, Row{})
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%q: %v, want ErrInvalidArgument", name, err)
+			continue
+		}
+		mustContain(t, err.Error(), "Invalid table parameters: Table name")
+		if _, err := f.AppendToTable(bg, name, Row{}); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("AppendToTable(%q): %v", name, err)
+		}
+		if err := f.PublishRowsToTable(bg, name, []Row{{}}); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("PublishRowsToTable(%q): %v", name, err)
+		}
+	}
+	if n := len(f.own.allPublishes()); n != len(valid) {
+		t.Errorf("%d publications, want %d", n, len(valid))
+	}
+}
+
+func TestTableWritesNeedSwarmAndAppKey(t *testing.T) {
+	for _, missing := range []string{"SWARM_KEY", "APP_KEY"} {
+		t.Run(missing, func(t *testing.T) {
+			setIdentityEnv(t)
+			unsetEnv(t, missing)
+			f := newTestFlock(t)
+			want := missing + " not set in environment variables!"
+			ops := map[string]func() error{
+				"PublishToTable": func() error { return f.PublishToTable(bg, "t", Row{}) },
+				"AppendToTable": func() error {
+					_, err := f.AppendToTable(bg, "t", Row{})
+					return err
+				},
+				"PublishRowsToTable": func() error { return f.PublishRowsToTable(bg, "t", []Row{{}}) },
+				"AppendRowsToTable": func() error {
+					_, err := f.AppendRowsToTable(bg, "t", []Row{{}})
+					return err
+				},
+				"ReportError": func() error {
+					_, err := f.ReportError(bg, "boom")
+					return err
+				},
+				"SubscribeToTable": func() error {
+					_, err := f.SubscribeToTable(bg, "t", func(*Event) {})
+					return err
+				},
+			}
+			for name, op := range ops {
+				err := op()
+				if !errors.Is(err, ErrMissingConfig) || errors.Is(err, ErrInvalidArgument) {
+					t.Errorf("%s: %v, want only ErrMissingConfig", name, err)
+					continue
+				}
+				if !strings.HasSuffix(err.Error(), want) {
+					t.Errorf("%s: %q, want %q", name, err, want)
+				}
+			}
+			if len(f.own.allPublishes())+len(f.own.allCalls())+len(f.own.allSubs()) != 0 {
+				t.Error("an operation reached the connection")
+			}
+			// Parameters are validated first.
+			if err := f.PublishToTable(bg, "bad name", Row{}); !errors.Is(err, ErrInvalidArgument) {
+				t.Errorf("validation order: %v", err)
+			}
+		})
+	}
+}
+
+func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
+	f := flock(t)
+	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	res, err := f.AppendToTable(bg, "sensordata", Row{"temperature": 21.5}, Kwargs{"batch": "b1"}, CallOptions{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(res.Value(), map[string]any{"success": true}) {
+		t.Errorf("result %#v", res.Value())
+	}
+	got := f.own.lastCall(t)
+	want := fakeCall{
+		Procedure: "append.10.20.sensordata",
+		Args:      []any{map[string]any{"temperature": 21.5}},
+		Kwargs:    withMetadata(map[string]any{"batch": "b1"}),
+		Opts:      &CallOptions{Timeout: time.Second},
+		Window:    DefaultReconnectWindow,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("call %#v\nwant %#v", got, want)
+	}
+
+	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr(crossbar.ErrURINoSuchProcedure) }
+	_, err = f.AppendToTable(bg, "sensordata", Row{})
+	if want := "Append to table 'sensordata' failed with WAMP error 'wamp.error.no_such_procedure'"; err == nil || err.Error() != want {
+		t.Errorf("error %v, want %q", err, want)
+	}
+}
+
+func TestReconnectWindowOnlyForTableOperations(t *testing.T) {
+	for _, window := range []time.Duration{DefaultReconnectWindow, 0, 5 * time.Second} {
+		f := flock(t, WithReconnectWindow(window))
+		f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return &crossbar.Result{}, nil }
+		_ = f.PublishToTable(bg, "t", Row{})
+		_ = f.PublishRowsToTable(bg, "t", []Row{{}})
+		_, _ = f.AppendToTable(bg, "t", Row{})
+		_, _ = f.AppendRowsToTable(bg, "t", []Row{{}})
+		_, _ = f.ReportError(bg, "x")
+		_, _ = f.ReportError(bg, "x", ReportErrorOptions{Append: true})
+		_, _ = f.GetHistory(bg, "t", nil)
+		_, _ = f.GetSeriesHistory(bg, "t", SeriesQueryParams{Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}})
+		_, _ = f.RevealSecrets(bg, "t", nil)
+		_, _ = f.VerifySecret(bg, "t", "c", "x", nil)
+		for _, p := range f.own.allPublishes() {
+			if p.Window != window {
+				t.Errorf("publish %s: window %v, want %v", p.Topic, p.Window, window)
+			}
+		}
+		for _, c := range f.own.allCalls() {
+			if c.Window != window {
+				t.Errorf("call %s: window %v, want %v", c.Procedure, c.Window, window)
+			}
+		}
+
+		// Plain operations never ride out a restart.
+		_ = f.Publish(bg, "plain.topic")
+		_, _ = f.Call(bg, "plain.proc")
+		_, _ = f.CallDeviceFunction(bg, 42, "fn")
+		_, _ = f.SetDeviceLocation(bg, 1, 2)
+		pubs, calls := f.own.allPublishes(), f.own.allCalls()
+		if w := pubs[len(pubs)-1].Window; w != 0 {
+			t.Errorf("Publish window %v", w)
+		}
+		for _, c := range calls[len(calls)-3:] {
+			if c.Window != 0 {
+				t.Errorf("%s window %v", c.Procedure, c.Window)
+			}
+		}
+	}
+}
+
+type sensorReading struct {
+	Temperature float64   `json:"temperature"`
+	At          time.Time `json:"tsp"`
+}
+
+func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
+	f := flock(t)
+	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+		return resultOf(map[string]any{"success": true, "count": int64(2)}), nil
+	}
+	rows := []Row{{"temp": 22}, {"temp": 23}}
+	wantRows := []any{map[string]any{"temp": int64(22)}, map[string]any{"temp": int64(23)}}
+
+	if err := f.PublishRowsToTable(bg, "sensordata", rows, Kwargs{"source": "plc"}); err != nil {
+		t.Fatal(err)
+	}
+	pub := f.own.lastPublish(t)
+	wantPub := fakePublish{
+		Topic:  "bulk.10.20.sensordata",
+		Args:   []any{wantRows},
+		Kwargs: withMetadata(map[string]any{"source": "plc"}),
+		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Window: DefaultReconnectWindow,
+	}
+	if !reflect.DeepEqual(pub, wantPub) {
+		t.Errorf("published %#v\nwant %#v", pub, wantPub)
+	}
+
+	res, err := f.AppendRowsToTable(bg, "sensordata", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(res.Value(), map[string]any{"success": true, "count": int64(2)}) {
+		t.Errorf("result %#v", res.Value())
+	}
+	call := f.own.lastCall(t)
+	wantCall := fakeCall{
+		Procedure: "appendBulk.10.20.sensordata",
+		Args:      []any{wantRows},
+		Kwargs:    deviceMetadata(),
+		Window:    DefaultReconnectWindow,
+	}
+	if !reflect.DeepEqual(call, wantCall) {
+		t.Errorf("call %#v\nwant %#v", call, wantCall)
+	}
+
+	// Structs are encoded through their json tags.
+	at := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
+	if err := f.PublishRowsToTable(bg, "sensordata", []sensorReading{{Temperature: 22.5, At: at}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []any{[]any{map[string]any{"temperature": 22.5, "tsp": "2026-01-15T10:30:00Z"}}}
+	if got := f.own.lastPublish(t).Args; !reflect.DeepEqual(got, want) {
+		t.Errorf("struct rows %#v", got)
+	}
+
+	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+		return nil, wampErr("wamp.error.invalid_argument", "bad row")
+	}
+	_, err = f.AppendRowsToTable(bg, "sensordata", rows)
+	if want := `Bulk append of 2 row(s) to table 'sensordata' failed with WAMP error 'wamp.error.invalid_argument' — ["bad row"]`; err == nil || err.Error() != want {
+		t.Errorf("error %v\nwant %q", err, want)
+	}
+}
+
+func TestBulkWritesRejectInvalidBatches(t *testing.T) {
+	f := flock(t)
+	for _, rows := range []any{nil, []Row{}, []int{1}, "x", Row{"a": 1}, []any{Row{"a": 1}, "not-a-row"}} {
+		err := f.PublishRowsToTable(bg, "sensordata", rows)
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("PublishRowsToTable(%#v): %v", rows, err)
+			continue
+		}
+		mustContain(t, err.Error(), "Invalid bulk table parameters")
+		if _, err := f.AppendRowsToTable(bg, "sensordata", rows); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("AppendRowsToTable(%#v): %v", rows, err)
+		}
+	}
+	if len(f.own.allPublishes())+len(f.own.allCalls()) != 0 {
+		t.Error("an invalid batch reached the connection")
+	}
+}
+
+type tracedError struct{ msg string }
+
+func (e tracedError) Error() string { return e.msg }
+
+// Format adds a stack trace for %+v, like github.com/pkg/errors does.
+func (e tracedError) Format(s fmt.State, verb rune) {
+	if verb == 'v' && s.Flag('+') {
+		fmt.Fprintf(s, "%s\nmain.main\n\t/app/main.go:12", e.msg)
+		return
+	}
+	fmt.Fprint(s, e.msg)
+}
+
+type stringer struct{}
+
+func (stringer) String() string { return "from String()" }
+
+func TestReportErrorPublishesAnAppTaggedRow(t *testing.T) {
+	f := flock(t)
+	if _, err := f.ReportError(bg, "boom", ReportErrorOptions{Level: LevelWarn, Tsp: "2026-01-01T00:00:00+00:00"}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.own.lastPublish(t)
+	if got.Topic != "10.20.error-logs" || got.Window != DefaultReconnectWindow {
+		t.Errorf("published to %s (window %v)", got.Topic, got.Window)
+	}
+	wantRow := map[string]any{
+		"tsp":          "2026-01-01T00:00:00+00:00",
+		"msg":          "boom",
+		"user_message": "boom", // defaults to msg
+		"source":       "app",
+		"level":        "warn",
+	}
+	if !reflect.DeepEqual(got.Args, []any{wantRow}) {
+		t.Errorf("row %#v\nwant %#v", got.Args, wantRow)
+	}
+	if !reflect.DeepEqual(got.Kwargs, deviceMetadata()) {
+		t.Errorf("kwargs %#v", got.Kwargs)
+	}
+	if len(f.own.allCalls()) != 0 {
+		t.Error("the append procedure must not be called")
+	}
+}
+
+func TestReportErrorAppendUsesTheAppendProcedure(t *testing.T) {
+	f := flock(t)
+	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	res, err := f.ReportError(bg, "kaboom", ReportErrorOptions{Append: true, Tsp: "2026-01-01T00:00:00.000Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || !reflect.DeepEqual(res.Value(), map[string]any{"success": true}) {
+		t.Errorf("result %#v", res)
+	}
+	call := f.own.lastCall(t)
+	wantRow := map[string]any{
+		"tsp": "2026-01-01T00:00:00.000Z", "msg": "kaboom", "user_message": "kaboom", "source": "app", "level": "error",
+	}
+	if call.Procedure != "append.10.20.error-logs" || !reflect.DeepEqual(call.Args, []any{wantRow}) {
+		t.Errorf("call %#v", call)
+	}
+	if len(f.own.allPublishes()) != 0 {
+		t.Error("nothing must be published")
+	}
+}
+
+func TestReportErrorMessages(t *testing.T) {
+	f := flock(t)
+	row := func(errOrMsg any, opts ...ReportErrorOptions) map[string]any {
+		t.Helper()
+		if _, err := f.ReportError(bg, errOrMsg, opts...); err != nil {
+			t.Fatal(err)
+		}
+		return f.own.lastPublish(t).Args[0].(map[string]any)
+	}
+
+	if r := row(errors.New("explode")); r["msg"] != "explode" || r["user_message"] != "explode" {
+		t.Errorf("error row %#v", r)
+	}
+	r := row(tracedError{"pump failed"})
+	if r["msg"] != "pump failed\nmain.main\n\t/app/main.go:12" {
+		t.Errorf("%%+v not used: %q", r["msg"])
+	}
+	if got := row(fmt.Errorf("wrapped: %w", tracedError{"inner"}))["msg"]; got != "wrapped: inner" {
+		t.Errorf("wrapped error msg %q", got)
+	}
+	if got := row(stringer{})["msg"]; got != "from String()" {
+		t.Errorf("Stringer msg %q", got)
+	}
+	if got := row(42)["msg"]; got != "42" {
+		t.Errorf("value msg %q", got)
+	}
+
+	r = row("ConnectionError: [Errno 111] refused", ReportErrorOptions{UserMessage: "Pump 1 is not responding"})
+	if r["msg"] != "ConnectionError: [Errno 111] refused" || r["user_message"] != "Pump 1 is not responding" {
+		t.Errorf("user message row %#v", r)
+	}
+
+	// The default timestamp is now, in UTC, with milliseconds.
+	before := time.Now().Add(-time.Second)
+	tsp := row("x")["tsp"].(string)
+	parsed, err := time.Parse("2006-01-02T15:04:05.000Z07:00", tsp)
+	if err != nil || !strings.HasSuffix(tsp, "Z") || parsed.Before(before) || parsed.After(time.Now().Add(time.Second)) {
+		t.Errorf("default tsp %q (%v)", tsp, err)
+	}
+
+	if _, err := f.ReportError(bg, nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("nil: %v", err)
+	}
+}
+
+func TestSubscribeToTableSubscribesBothFeeds(t *testing.T) {
+	f := flock(t)
+	var mu sync.Mutex
+	var got []*Event
+	handler := func(ev *Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, ev)
+	}
+	opts := SubscribeOptions{GetRetained: true}
+	ts, err := f.SubscribeToTable(bg, "sensordata", handler, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs := f.own.allSubs()
+	if len(subs) != 2 || subs[0].Topic != "transformed.sensordata" || subs[1].Topic != "transformed.bulk.sensordata" {
+		t.Fatalf("subscriptions %#v", subs)
+	}
+	for _, s := range subs {
+		if !reflect.DeepEqual(s.Opts, &opts) {
+			t.Errorf("%s: options %#v", s.Topic, s.Opts)
+		}
+	}
+	if ts.Rows != subs[0].Sub || ts.Bulk != subs[1].Sub {
+		t.Error("TableSubscription does not hold both subscriptions")
+	}
+
+	// A single-row event reaches the handler as it is.
+	single := &Event{Topic: "transformed.sensordata", Args: []any{map[string]any{"temp": int64(1)}}}
+	f.own.fire("transformed.sensordata", single)
+
+	// The data backend republishes a bulk insert as one event carrying the batch.
+	f.own.fire("transformed.bulk.sensordata", &Event{
+		Topic:   "transformed.bulk.sensordata",
+		Args:    []any{[]any{map[string]any{"temp": int64(2)}, nil, map[string]any{"temp": int64(3)}}},
+		Kwargs:  map[string]any{"numSub": int64(1)},
+		Details: map[string]any{"topic": "x"},
+	})
+	f.own.fire("transformed.bulk.sensordata", &Event{Args: []any{nil}})                              // no rows
+	f.own.fire("transformed.bulk.sensordata", &Event{})                                              // no args
+	f.own.fire("transformed.bulk.sensordata", &Event{Args: []any{map[string]any{"temp": int64(4)}}}) // one row, not a list
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 4 {
+		t.Fatalf("%d events, want 4: %#v", len(got), got)
+	}
+	if got[0] != single {
+		t.Error("a single-row event must be delivered unchanged")
+	}
+	for i, want := range []int64{2, 3} {
+		ev := got[i+1]
+		if !reflect.DeepEqual(ev.Args, []any{map[string]any{"temp": want}}) ||
+			ev.Topic != "transformed.bulk.sensordata" ||
+			!reflect.DeepEqual(ev.Kwargs, map[string]any{"numSub": int64(1)}) ||
+			!reflect.DeepEqual(ev.Details, map[string]any{"topic": "x"}) {
+			t.Errorf("bulk row %d: %#v", i, ev)
+		}
+		if ev.Row()["temp"] != want {
+			t.Errorf("Event.Row() = %#v", ev.Row())
+		}
+	}
+	if !reflect.DeepEqual(got[3].Args, []any{map[string]any{"temp": int64(4)}}) {
+		t.Errorf("non-list bulk payload %#v", got[3].Args)
+	}
+
+	if err := ts.Unsubscribe(bg); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range f.own.allSubs() {
+		if !s.Removed {
+			t.Errorf("%s still subscribed", s.Topic)
+		}
+	}
+}
+
+func TestBulkHandlerPanicDoesNotCostTheRestOfTheBatch(t *testing.T) {
+	f := flock(t)
+	var delivered []any
+	_, err := f.SubscribeToTable(bg, "sensordata", func(ev *Event) {
+		delivered = append(delivered, ev.Row()["n"])
+		if ev.Row()["n"] == int64(1) {
+			panic("handler bug")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.own.fire("transformed.bulk.sensordata", &Event{Topic: "transformed.bulk.sensordata", Args: []any{[]any{
+		map[string]any{"n": int64(1)}, map[string]any{"n": int64(2)},
+	}}})
+	if !reflect.DeepEqual(delivered, []any{int64(1), int64(2)}) {
+		t.Errorf("delivered %#v", delivered)
+	}
+	mustContain(t, f.logs.String(), "panicked", "handler bug")
+}
+
+func TestSubscribeToTableRemovesTheFirstSubscriptionWhenTheSecondFails(t *testing.T) {
+	f := flock(t)
+	f.own.subscribeFn = func(topic string) error {
+		if strings.HasPrefix(topic, "transformed.bulk.") {
+			return wampErr("wamp.error.not_authorized")
+		}
+		return nil
+	}
+	_, err := f.SubscribeToTable(bg, "sensordata", func(*Event) {})
+	if want := "Subscription to topic 'transformed.bulk.sensordata' failed with WAMP error 'wamp.error.not_authorized'"; err == nil || err.Error() != want {
+		t.Fatalf("error %v, want %q", err, want)
+	}
+	subs := f.own.allSubs()
+	if len(subs) != 1 || !subs[0].Removed {
+		t.Errorf("subscriptions %#v: the row feed must be removed again", subs)
+	}
+}
+
+func TestSubscribeToTableValidation(t *testing.T) {
+	f := flock(t)
+	for _, table := range []string{"", " ", " x"} {
+		if _, err := f.SubscribeToTable(bg, table, func(*Event) {}); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%q: %v", table, err)
+		}
+	}
+	if _, err := f.SubscribeToTable(bg, "t", nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("nil handler: %v", err)
+	}
+	if len(f.own.allSubs()) != 0 {
+		t.Error("an invalid subscription reached the connection")
+	}
+	var ts *TableSubscription
+	if err := ts.Unsubscribe(bg); err != nil {
+		t.Errorf("nil TableSubscription: %v", err)
+	}
+}
+
+func TestSubscribe(t *testing.T) {
+	f := flock(t)
+	opts := SubscribeOptions{Match: "prefix"}
+	sub, err := f.Subscribe(bg, "com.example", func(*Event) {}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs := f.own.allSubs()
+	if len(subs) != 1 || subs[0].Topic != "com.example" || !reflect.DeepEqual(subs[0].Opts, &opts) || subs[0].Sub != sub {
+		t.Errorf("subscriptions %#v", subs)
+	}
+	if _, err := f.Subscribe(bg, "com.other", func(*Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if f.own.allSubs()[1].Opts != nil {
+		t.Error("no options must be sent as nil")
+	}
+	if err := f.Unsubscribe(bg, sub); err != nil || !f.own.allSubs()[0].Removed {
+		t.Errorf("Unsubscribe: %v", err)
+	}
+	if err := f.Unsubscribe(bg, nil); err != nil {
+		t.Errorf("Unsubscribe(nil): %v", err)
+	}
+
+	f.own.subscribeFn = func(string) error { return wampErr("wamp.error.not_authorized") }
+	_, err = f.Subscribe(bg, "com.denied", func(*Event) {})
+	if want := "Subscription to topic 'com.denied' failed with WAMP error 'wamp.error.not_authorized'"; err == nil || err.Error() != want {
+		t.Errorf("error %v", err)
+	}
+	for _, topic := range []string{"", " t"} {
+		if _, err := f.Subscribe(bg, topic, func(*Event) {}); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%q: %v", topic, err)
+		}
+	}
+	if _, err := f.Subscribe(bg, "t", nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("nil handler: %v", err)
+	}
+}

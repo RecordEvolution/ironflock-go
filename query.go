@@ -159,15 +159,18 @@ type SecretVerifyResult struct {
 // secret procedures. maxLimit is MaxQueryLimit or MaxSecretLimit. Optional
 // parts are omitted rather than sent as null: the data backend rejects an
 // explicit null for an optional field.
-func queryWire(q *TableQueryParams, maxLimit int) (map[string]any, error) {
+//
+// Filter operators outside SQLOperators are logged to log as a warning.
+func queryWire(q *TableQueryParams, maxLimit int, log *slog.Logger) (map[string]any, error) {
 	if q == nil {
 		return nil, invalidf("query parameters are required")
 	}
 	if q.Limit < 1 || q.Limit > maxLimit {
 		return nil, invalidf("limit must be between 1 and %d, got %d", maxLimit, q.Limit)
 	}
-	if q.Offset < 0 || q.Offset > maxUint32 {
-		return nil, invalidf("offset must be between 0 and %d, got %d", maxUint32, q.Offset)
+	// int64: maxUint32 overflows int on 32-bit platforms (e.g. GOARCH=arm).
+	if q.Offset < 0 || int64(q.Offset) > maxUint32 {
+		return nil, invalidf("offset must be between 0 and %d, got %d", int64(maxUint32), q.Offset)
 	}
 	out := map[string]any{
 		"limit":  int64(q.Limit),
@@ -181,7 +184,7 @@ func queryWire(q *TableQueryParams, maxLimit int) (map[string]any, error) {
 		out["timeRange"] = tr
 	}
 	if len(q.FilterAnd) > 0 {
-		filters, err := filtersWire(q.FilterAnd, true)
+		filters, err := filtersWire(q.FilterAnd, true, log)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +204,8 @@ func queryWire(q *TableQueryParams, maxLimit int) (map[string]any, error) {
 }
 
 // seriesWire validates p and returns the payload of the series procedure.
-func seriesWire(p *SeriesQueryParams) (map[string]any, error) {
+// Filter operators outside SQLOperators are logged to log as a warning.
+func seriesWire(p *SeriesQueryParams, log *slog.Logger) (map[string]any, error) {
 	if p == nil {
 		return nil, invalidf("series query parameters are required")
 	}
@@ -248,7 +252,7 @@ func seriesWire(p *SeriesQueryParams) (map[string]any, error) {
 		out["groupBy"] = groupBy
 	}
 	if len(p.FilterAnd) > 0 {
-		filters, err := filtersWire(p.FilterAnd, false)
+		filters, err := filtersWire(p.FilterAnd, false, log)
 		if err != nil {
 			return nil, err
 		}
@@ -271,10 +275,10 @@ func containsLatest(f Filter) bool {
 	return false
 }
 
-func filtersWire(filters []Filter, allowGroups bool) ([]any, error) {
+func filtersWire(filters []Filter, allowGroups bool, log *slog.Logger) ([]any, error) {
 	out := make([]any, len(filters))
 	for i, f := range filters {
-		w, err := filterWire(f, allowGroups, fmt.Sprintf("filterAnd[%d]", i))
+		w, err := filterWire(f, allowGroups, fmt.Sprintf("filterAnd[%d]", i), log)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +287,7 @@ func filtersWire(filters []Filter, allowGroups bool) ([]any, error) {
 	return out, nil
 }
 
-func filterWire(f Filter, allowGroups bool, path string) (map[string]any, error) {
+func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[string]any, error) {
 	switch {
 	case f.Latest:
 		return map[string]any{"latest": true}, nil
@@ -300,7 +304,7 @@ func filterWire(f Filter, allowGroups bool, path string) (map[string]any, error)
 		}
 		subs := make([]any, len(f.Filters))
 		for i, sub := range f.Filters {
-			w, err := filterWire(sub, true, fmt.Sprintf("%s.filters[%d]", path, i))
+			w, err := filterWire(sub, true, fmt.Sprintf("%s.filters[%d]", path, i), log)
 			if err != nil {
 				return nil, err
 			}
@@ -324,7 +328,10 @@ func filterWire(f Filter, allowGroups bool, path string) (map[string]any, error)
 		}
 	}
 	if !known {
-		slog.Warn("ironflock: filter operator is not in the standard list", "operator", f.Operator, "known", SQLOperators)
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn(fmt.Sprintf("Operator '%s' is not in standard list: %v", f.Operator, SQLOperators))
 	}
 	out := map[string]any{"column": f.Column, "operator": f.Operator}
 

@@ -1,0 +1,382 @@
+package ironflock
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/RecordEvolution/ironflock-go/crossbar"
+)
+
+// maxTableNameLength is the longest table name the SDK accepts.
+const maxTableNameLength = 100
+
+// validateTableName checks a table name the app writes to and returns it
+// trimmed: non-empty, at most 100 characters, only letters, digits, hyphens
+// and underscores (and at least one letter or digit).
+func validateTableName(name string) (string, error) {
+	t := strings.TrimSpace(name)
+	if t == "" {
+		return "", invalidf("Table name cannot be empty or just whitespace")
+	}
+	alnum := false
+	for _, r := range t {
+		switch {
+		case r == '_' || r == '-':
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			alnum = true
+		default:
+			return "", invalidTableName(name)
+		}
+	}
+	if !alnum {
+		return "", invalidTableName(name)
+	}
+	if utf8.RuneCountInString(t) > maxTableNameLength {
+		return "", invalidf("Table name too long (max %d characters)", maxTableNameLength)
+	}
+	return t, nil
+}
+
+func invalidTableName(name string) error {
+	return invalidf("Table name should contain only alphanumeric characters, hyphens, and underscores, got %q", name)
+}
+
+// mergeKwargs merges and normalizes the optional Kwargs of a bulk operation.
+func mergeKwargs(kwargs []Kwargs) (map[string]any, error) {
+	args := make([]any, len(kwargs))
+	for i, kw := range kwargs {
+		args[i] = kw
+	}
+	_, kw, _, err := splitArgs(args)
+	return kw, err
+}
+
+// Publish publishes an event to topic. Positional args are sent as WAMP
+// args; a Kwargs value among them as WAMP kwargs. The device metadata
+// (DEVICE_SERIAL_NUMBER, DEVICE_KEY, DEVICE_NAME) is added to the kwargs,
+// user keys winning. The publish is acknowledged: a refusal by the router is
+// returned as an error.
+func (f *IronFlock) Publish(ctx context.Context, topic string, args ...any) error {
+	if err := validateTopic("publish", topic); err != nil {
+		return err
+	}
+	return f.publish(ctx, "publish", topic, args, 0)
+}
+
+// publish sends an acknowledged publication with the device metadata merged
+// into its kwargs, waiting up to window for a session. group names the
+// parameters in validation errors.
+func (f *IronFlock) publish(ctx context.Context, group, topic string, args []any, window time.Duration) error {
+	pos, kw, callOpts, err := splitArgs(args)
+	if err != nil {
+		return invalidParams(group, err)
+	}
+	if callOpts != nil {
+		return invalidf("Invalid %s parameters: CallOptions apply to calls, not to publications", group)
+	}
+	return f.publishMessage(ctx, topic, pos, kw, window)
+}
+
+func (f *IronFlock) publishMessage(ctx context.Context, topic string, args []any, kwargs map[string]any, window time.Duration) error {
+	err := f.conn.Publish(ctx, topic, args, f.withDeviceMetadata(kwargs),
+		&crossbar.PublishOptions{Acknowledge: true}, window)
+	return operationFailed(fmt.Sprintf("Publish to topic '%s'", topic), err)
+}
+
+// PublishToTable publishes a row to a fleet table: the table's write topic
+// <SWARM_KEY>.<APP_KEY>.<table>. Fire-and-forget: the acknowledgement
+// confirms delivery to the router, not the database insert.
+//
+//	ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5})
+func (f *IronFlock) PublishToTable(ctx context.Context, table string, args ...any) error {
+	t, err := validateTableName(table)
+	if err != nil {
+		return invalidParams("table", err)
+	}
+	if err := f.requireKeys(); err != nil {
+		return err
+	}
+	return f.publish(ctx, "table", fmt.Sprintf("%d.%d.%s", f.swarmKey, f.appKey, t), args, f.reconnectWindow)
+}
+
+// AppendToTable appends a row to a fleet table by calling its append
+// procedure append.<SWARM_KEY>.<APP_KEY>.<table>, and returns the insert
+// outcome.
+func (f *IronFlock) AppendToTable(ctx context.Context, table string, args ...any) (*Result, error) {
+	t, err := validateTableName(table)
+	if err != nil {
+		return nil, invalidParams("table", err)
+	}
+	pos, kw, callOpts, err := splitArgs(args)
+	if err != nil {
+		return nil, invalidParams("table", err)
+	}
+	if err := f.requireKeys(); err != nil {
+		return nil, err
+	}
+	topic := fmt.Sprintf("append.%d.%d.%s", f.swarmKey, f.appKey, t)
+	res, err := f.conn.Call(ctx, topic, pos, f.withDeviceMetadata(kw), callOpts, f.reconnectWindow)
+	if err != nil {
+		return nil, operationFailed(fmt.Sprintf("Append to table '%s'", t), err)
+	}
+	return res, nil
+}
+
+// bulkParams validates the parameters shared by the bulk operations.
+func bulkParams(table string, rows any, kwargs []Kwargs) (string, []any, map[string]any, error) {
+	t, err := validateTableName(table)
+	if err != nil {
+		return "", nil, nil, invalidParams("bulk table", err)
+	}
+	batch, err := normalizeRows(rows)
+	if err != nil {
+		return "", nil, nil, invalidf("Invalid bulk table parameters: %v", err)
+	}
+	kw, err := mergeKwargs(kwargs)
+	if err != nil {
+		return "", nil, nil, invalidParams("bulk table", err)
+	}
+	return t, batch, kw, nil
+}
+
+// PublishRowsToTable publishes many rows in a single message (bulk insert)
+// to bulk.<SWARM_KEY>.<APP_KEY>.<table>; the platform inserts the batch
+// atomically. rows is a non-empty slice of rows (Row / map[string]any, or
+// structs encoded via their json tags). kwargs are shared by the batch.
+func (f *IronFlock) PublishRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) error {
+	t, batch, kw, err := bulkParams(table, rows, kwargs)
+	if err != nil {
+		return err
+	}
+	if err := f.requireKeys(); err != nil {
+		return err
+	}
+	// The whole batch is the single positional argument: the data backend
+	// reads args[0] as the array of rows.
+	topic := fmt.Sprintf("bulk.%d.%d.%s", f.swarmKey, f.appKey, t)
+	return f.publishMessage(ctx, topic, []any{batch}, kw, f.reconnectWindow)
+}
+
+// AppendRowsToTable appends many rows in a single call (bulk insert) to
+// appendBulk.<SWARM_KEY>.<APP_KEY>.<table> and returns the outcome (e.g.
+// {"success": true, "count": N}). All-or-nothing: if any row is invalid,
+// nothing is persisted.
+func (f *IronFlock) AppendRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) (*Result, error) {
+	t, batch, kw, err := bulkParams(table, rows, kwargs)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.requireKeys(); err != nil {
+		return nil, err
+	}
+	topic := fmt.Sprintf("appendBulk.%d.%d.%s", f.swarmKey, f.appKey, t)
+	res, err := f.conn.Call(ctx, topic, []any{batch}, f.withDeviceMetadata(kw), nil, f.reconnectWindow)
+	if err != nil {
+		return nil, operationFailed(fmt.Sprintf("Bulk append of %d row(s) to table '%s'", len(batch), t), err)
+	}
+	return res, nil
+}
+
+// ErrorLevel is the severity of a reported error.
+type ErrorLevel string
+
+// Error levels.
+const (
+	LevelError ErrorLevel = "error"
+	LevelWarn  ErrorLevel = "warn"
+	LevelInfo  ErrorLevel = "info"
+	LevelDebug ErrorLevel = "debug"
+)
+
+// ReportErrorOptions configures ReportError.
+type ReportErrorOptions struct {
+	// Level defaults to LevelError.
+	Level ErrorLevel
+	// Append uses the append procedure and returns the insert outcome
+	// instead of a fire-and-forget publish.
+	Append bool
+	// Tsp overrides the timestamp (default: now, RFC 3339 UTC).
+	Tsp string
+	// UserMessage is the operator-facing text boards show (default: msg).
+	UserMessage string
+}
+
+// errorTimestampLayout is the default tsp of ReportError: RFC 3339 in UTC
+// with milliseconds, as JavaScript's Date.toISOString writes it.
+const errorTimestampLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// ReportError writes an application error into the data backend's
+// error-logs table, stamped source "app" — queryable with GetHistory and
+// streamed on transformed.error-logs, without firing the platform's
+// system-error toast. errOrMsg is an error (recorded with fmt's %+v, so
+// errors that carry a stack trace include it) or a message string. The
+// Result is nil unless opts.Append is set.
+//
+// The row is {"tsp", "msg", "user_message", "source": "app", "level"}. Only
+// the first opts value is used.
+func (f *IronFlock) ReportError(ctx context.Context, errOrMsg any, opts ...ReportErrorOptions) (*Result, error) {
+	if errOrMsg == nil {
+		return nil, invalidf("ReportError needs an error or a message")
+	}
+	var o ReportErrorOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	msg := errorText(errOrMsg)
+	row := Row{
+		"tsp":          o.Tsp,
+		"msg":          msg,
+		"user_message": o.UserMessage,
+		"source":       "app",
+		"level":        string(o.Level),
+	}
+	if o.Tsp == "" {
+		row["tsp"] = time.Now().UTC().Format(errorTimestampLayout)
+	}
+	if o.UserMessage == "" {
+		row["user_message"] = msg
+	}
+	if o.Level == "" {
+		row["level"] = string(LevelError)
+	}
+	if o.Append {
+		return f.AppendToTable(ctx, ErrorLogsTable, row)
+	}
+	return nil, f.PublishToTable(ctx, ErrorLogsTable, row)
+}
+
+// errorText is the msg column of a reported error.
+func errorText(v any) string {
+	switch x := v.(type) {
+	case error:
+		return fmt.Sprintf("%+v", x)
+	case string:
+		return x
+	case fmt.Stringer:
+		return x.String()
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+// TableSubscription is the pair of subscriptions behind SubscribeToTable:
+// the table's realtime feed and its bulk counterpart.
+type TableSubscription struct {
+	Rows *Subscription
+	Bulk *Subscription
+	conn wampConn
+}
+
+// Unsubscribe removes both subscriptions.
+func (t *TableSubscription) Unsubscribe(ctx context.Context) error {
+	if t == nil || t.conn == nil {
+		return nil
+	}
+	var errs []error
+	for _, sub := range []*Subscription{t.Rows, t.Bulk} {
+		if sub == nil {
+			continue
+		}
+		if err := t.conn.Unsubscribe(ctx, sub); err != nil {
+			errs = append(errs, operationFailed(fmt.Sprintf("Unsubscribe from topic '%s'", sub.Topic()), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SubscribeToTable subscribes handler to the stored rows of a table: the
+// data backend's realtime feed transformed.<table> and its bulk counterpart
+// transformed.bulk.<table>. Each event carries one row as stored — typed to
+// the data-template columns, secret columns masked — in Args[0] (see
+// Event.Row); rows of a bulk insert are delivered one event per row.
+func (f *IronFlock) SubscribeToTable(ctx context.Context, table string, handler EventHandler, opts ...SubscribeOptions) (*TableSubscription, error) {
+	if err := validateTopic("subscription", table); err != nil {
+		return nil, err
+	}
+	if err := f.requireKeys(); err != nil {
+		return nil, err
+	}
+	return subscribeTable(ctx, f.conn, f.log, f.cleanupTimeout, table, handler, opts)
+}
+
+// subscribeTable subscribes handler to transformed.<table> and, unrolled to
+// one event per row, to transformed.bulk.<table>. When the second
+// subscription fails the first is removed again.
+func subscribeTable(ctx context.Context, conn wampConn, log *slog.Logger, cleanup time.Duration,
+	table string, handler EventHandler, opts []SubscribeOptions) (*TableSubscription, error) {
+	if handler == nil {
+		return nil, invalidf("Invalid subscription parameters: handler must not be nil")
+	}
+	so := firstSubscribeOptions(opts)
+
+	rowsTopic := "transformed." + table
+	rows, err := conn.Subscribe(ctx, rowsTopic, handler, so)
+	if err != nil {
+		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", rowsTopic), err)
+	}
+
+	bulkTopic := "transformed.bulk." + table
+	bulk, err := conn.Subscribe(ctx, bulkTopic, unrollBulk(handler, log), so)
+	if err != nil {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanup)
+		defer cancel()
+		if uerr := conn.Unsubscribe(cctx, rows); uerr != nil {
+			log.Warn(fmt.Sprintf("Failed to remove the subscription to '%s' after the bulk subscription failed: %v", rowsTopic, uerr))
+		}
+		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", bulkTopic), err)
+	}
+	return &TableSubscription{Rows: rows, Bulk: bulk, conn: conn}, nil
+}
+
+// unrollBulk wraps handler for a bulk feed, whose events carry the whole
+// batch as Args[0]: handler receives one event per row, Args = [row], with the
+// batch event's topic, kwargs and details. A nil batch delivers nothing, a
+// value that is not a list is delivered as a single row, and nil rows are
+// skipped. A panicking handler is recovered and logged per row, so it does
+// not cost the remaining rows of the batch.
+func unrollBulk(handler EventHandler, log *slog.Logger) EventHandler {
+	deliver := func(ev *Event, row any) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error(fmt.Sprintf("Table event handler for '%s' panicked: %v", ev.Topic, r))
+			}
+		}()
+		handler(&Event{
+			Topic:   ev.Topic,
+			Args:    []any{row},
+			Kwargs:  maps.Clone(ev.Kwargs),
+			Details: maps.Clone(ev.Details),
+		})
+	}
+	return func(ev *Event) {
+		if ev == nil || len(ev.Args) == 0 {
+			return
+		}
+		switch batch := ev.Args[0].(type) {
+		case nil:
+		case []any:
+			for _, row := range batch {
+				if row != nil {
+					deliver(ev, row)
+				}
+			}
+		default:
+			deliver(ev, batch)
+		}
+	}
+}
+
+func firstSubscribeOptions(opts []SubscribeOptions) *SubscribeOptions {
+	if len(opts) == 0 {
+		return nil
+	}
+	o := opts[0]
+	return &o
+}

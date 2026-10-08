@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -34,7 +36,7 @@ func splitArgs(args []any) (positional []any, kwargs map[string]any, callOpts *C
 			for k, val := range v {
 				nv, err := normalize(val)
 				if err != nil {
-					return nil, nil, nil, fmt.Errorf("%w: kwarg %q: %v", ErrInvalidArgument, k, err)
+					return nil, nil, nil, invalidf("kwarg %q: %v", k, err)
 				}
 				kwargs[k] = nv
 			}
@@ -46,7 +48,7 @@ func splitArgs(args []any) (positional []any, kwargs map[string]any, callOpts *C
 		default:
 			nv, err := normalize(a)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("%w: argument %d: %v", ErrInvalidArgument, len(positional), err)
+				return nil, nil, nil, invalidf("argument %d: %v", len(positional), err)
 			}
 			positional = append(positional, nv)
 		}
@@ -55,8 +57,8 @@ func splitArgs(args []any) (positional []any, kwargs map[string]any, callOpts *C
 }
 
 // normalize converts a payload value to the JSON-like shapes every IronFlock
-// SDK sends: nil, bool, string, int64/uint64, float64, []byte, []any and
-// map[string]any.
+// SDK sends: nil, bool, string, int64 (uint64 only above math.MaxInt64),
+// float64, []byte, []any and map[string]any.
 //
 // Structs (and pointers to them), time.Time, typed maps and typed slices are
 // converted through encoding/json, so struct fields are named by their json
@@ -66,8 +68,7 @@ func splitArgs(args []any) (positional []any, kwargs map[string]any, callOpts *C
 // and float64 otherwise.
 func normalize(v any) (any, error) {
 	switch x := v.(type) {
-	case nil, bool, string, []byte,
-		int64, uint64, float64:
+	case nil, bool, string, []byte, int64, float64:
 		return x, nil
 	case int:
 		return int64(x), nil
@@ -78,13 +79,15 @@ func normalize(v any) (any, error) {
 	case int32:
 		return int64(x), nil
 	case uint:
-		return uint64(x), nil
+		return unsigned(uint64(x)), nil
 	case uint8:
-		return uint64(x), nil
+		return int64(x), nil
 	case uint16:
-		return uint64(x), nil
+		return int64(x), nil
 	case uint32:
-		return uint64(x), nil
+		return int64(x), nil
+	case uint64:
+		return unsigned(x), nil
 	case float32:
 		return float64(x), nil
 	case json.Number:
@@ -152,6 +155,15 @@ func normalize(v any) (any, error) {
 	return fromJSON(out)
 }
 
+// unsigned returns u as int64 when it fits, as every integer travels, and as
+// uint64 only above math.MaxInt64.
+func unsigned(u uint64) any {
+	if u <= math.MaxInt64 {
+		return int64(u)
+	}
+	return u
+}
+
 // fromJSON converts a value decoded with json.Decoder.UseNumber, turning
 // numbers into int64 when integral and float64 otherwise.
 func fromJSON(v any) (any, error) {
@@ -181,9 +193,15 @@ func fromJSON(v any) (any, error) {
 	}
 }
 
+// jsonNumber converts a JSON number to int64 when it is an integer that fits,
+// to uint64 for a larger unsigned integer (so it keeps its precision), and to
+// float64 otherwise.
 func jsonNumber(n json.Number) (any, error) {
 	if i, err := n.Int64(); err == nil {
 		return i, nil
+	}
+	if u, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
+		return u, nil
 	}
 	f, err := n.Float64()
 	if err != nil {

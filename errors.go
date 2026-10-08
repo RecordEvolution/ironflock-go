@@ -13,8 +13,52 @@ import (
 // (the Python SDK's ValueError): test with errors.Is.
 var ErrInvalidArgument = errors.New("ironflock: invalid argument")
 
+// ErrMissingConfig is wrapped by every error about identity an operation
+// needs but the app was not given: no device serial number, or SWARM_KEY,
+// APP_KEY or a device key unset (or 0). The device agent injects all of them
+// into every app container; outside one, set them yourself (environment or
+// the With… options). Test with errors.Is.
+var ErrMissingConfig = errors.New("ironflock: missing configuration")
+
+// sdkError is an error the SDK raises itself, before any router traffic: a
+// message classified by one or more of the sentinel errors above.
+type sdkError struct {
+	msg   string
+	kinds []error
+}
+
+// Error implements error: "<first sentinel>: <msg>".
+func (e *sdkError) Error() string { return e.kinds[0].Error() + ": " + e.msg }
+
+// Unwrap returns the sentinel errors classifying e, for errors.Is.
+func (e *sdkError) Unwrap() []error { return e.kinds }
+
+// invalidf returns an error wrapping ErrInvalidArgument.
 func invalidf(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrInvalidArgument, fmt.Sprintf(format, args...))
+	return &sdkError{msg: fmt.Sprintf(format, args...), kinds: []error{ErrInvalidArgument}}
+}
+
+// missingConfigf returns an error wrapping ErrMissingConfig.
+func missingConfigf(format string, args ...any) error {
+	return &sdkError{msg: fmt.Sprintf(format, args...), kinds: []error{ErrMissingConfig}}
+}
+
+// invalidParams prefixes a validation error with the parameter group it is
+// about ("Invalid query parameters: …"), as the Python and JavaScript SDKs
+// word them. Other errors are returned unchanged.
+func invalidParams(group string, err error) error {
+	var serr *sdkError
+	if errors.As(err, &serr) && errors.Is(serr, ErrInvalidArgument) {
+		return &sdkError{msg: fmt.Sprintf("Invalid %s parameters: %s", group, serr.msg), kinds: serr.kinds}
+	}
+	return err
+}
+
+// isClientError reports whether err is an error the SDK raised itself
+// (invalid argument or missing configuration). Such errors are returned as
+// they are rather than wrapped in an OperationError.
+func isClientError(err error) bool {
+	return errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrMissingConfig)
 }
 
 // OperationError reports a failed SDK operation. Op names the operation and
@@ -64,13 +108,13 @@ func WampURI(err error) string {
 	return ""
 }
 
-// operationFailed wraps err for operation op, leaving invalid-argument and
-// cross-app errors as they are.
+// operationFailed wraps err for operation op, leaving client-side errors
+// (invalid argument, missing configuration) and cross-app errors as they are.
 func operationFailed(op string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrInvalidArgument) {
+	if isClientError(err) {
 		return err
 	}
 	var cerr *CrossAppAccessError
@@ -94,7 +138,7 @@ func historyFailed(op, topic string, err error, secret bool) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrInvalidArgument) {
+	if isClientError(err) {
 		return err
 	}
 	text := err.Error()

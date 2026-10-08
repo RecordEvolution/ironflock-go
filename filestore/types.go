@@ -37,8 +37,23 @@ type Error struct {
 	// Code is the stable, machine-readable failure code (see the Code*
 	// constants). Unknown codes from a newer server pass through.
 	Code string
-	// Reason is human-readable detail for logs. Never branch on it.
+	// Reason is human-readable detail for logs. Never branch on it. It is
+	// kept as the service sent it, so it may be empty.
 	Reason string
+
+	// cause is the underlying failure, when there is one: the
+	// *crossbar.WampError a router rejection was mapped from, the network
+	// error behind CodePresignUnreachable, the decoding error behind a
+	// malformed payload.
+	cause error
+}
+
+// newError returns an *Error without an underlying cause.
+func newError(code, reason string) *Error { return &Error{Code: code, Reason: reason} }
+
+// wrapError returns an *Error caused by cause.
+func wrapError(code, reason string, cause error) *Error {
+	return &Error{Code: code, Reason: reason, cause: cause}
 }
 
 // Error implements error.
@@ -55,6 +70,12 @@ func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)
 	return ok && t.Code == e.Code && (t.Reason == "" || t.Reason == e.Reason)
 }
+
+// Unwrap returns the underlying failure, if any — for example the
+// *crossbar.WampError a CodeNotAvailable or CodeNotAuthorized was mapped
+// from, or the network error behind CodePresignUnreachable — so errors.As
+// can reach it. It returns nil for failures the service reported itself.
+func (e *Error) Unwrap() error { return e.cause }
 
 // ObjectInfo describes one stored object.
 type ObjectInfo struct {
