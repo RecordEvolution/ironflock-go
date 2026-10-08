@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 
 	ironflock "github.com/RecordEvolution/ironflock-go"
 	"github.com/RecordEvolution/ironflock-go/filestore"
@@ -36,9 +37,11 @@ func main() {
 
 		// Large files stream straight to the object store.
 		if path := os.Getenv("UPLOAD_FILE"); path != "" {
-			if _, err := files.PutFile(ctx, "uploads/"+info.Key, path); err != nil {
+			upload, err := files.PutFile(ctx, "uploads/"+filepath.Base(path), path)
+			if err != nil {
 				return err
 			}
+			log.Printf("uploaded %s (%d bytes)", upload.Key, upload.Size)
 		}
 
 		data, err := files.Get(ctx, "inspections/part-1.txt")

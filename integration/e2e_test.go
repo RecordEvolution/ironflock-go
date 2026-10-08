@@ -34,7 +34,11 @@ func startIronFlock(t *testing.T, ctx context.Context, opts ...ironflock.Option)
 	if err := ifl.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ifl.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := ifl.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
 	return ifl
 }
 
@@ -99,9 +103,9 @@ func TestDeviceFunctionInteropWithPython(t *testing.T) {
 	if err := serve.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { stdin.Close(); _ = serve.Wait() }()
+	defer func() { _ = stdin.Close(); _ = serve.Wait() }()
 	waitLine(t, stdout, "READY")
-	go io.Copy(io.Discard, stdout)
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	res, err := ifl.CallDeviceFunction(ctx, 42, "py_echo", 1, "two", ironflock.Kwargs{"k": true})
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +263,11 @@ func TestPerAppCredentialRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ifl.Stop(context.Background())
+	defer func() {
+		if err := ifl.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	started := make(chan error, 1)
@@ -372,12 +380,12 @@ func (p *freezeProxy) serve() {
 			return
 		}
 		if p.frozen.Load() {
-			c.Close()
+			_ = c.Close()
 			continue
 		}
 		u, err := net.Dial("tcp", p.target)
 		if err != nil {
-			c.Close()
+			_ = c.Close()
 			continue
 		}
 		p.mu.Lock()
@@ -408,11 +416,11 @@ func (p *freezeProxy) pipe(dst, src net.Conn) {
 }
 
 func (p *freezeProxy) close() {
-	p.ln.Close()
+	_ = p.ln.Close()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, c := range p.conns {
-		c.Close()
+		_ = c.Close()
 	}
 }
 
@@ -437,7 +445,11 @@ func TestKeepAliveDetectsHalfOpenLink(t *testing.T) {
 	if err := conn.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Stop(context.Background())
+	defer func() {
+		if err := conn.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
 
 	proxy.frozen.Store(true)
 	select {

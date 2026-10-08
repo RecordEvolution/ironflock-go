@@ -43,7 +43,11 @@ func TestCrossSDKScenario(t *testing.T) {
 	if err := ifl.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer ifl.Stop(context.Background())
+	defer func() {
+		if err := ifl.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
 
 	out := map[string]stepOut{}
 	step := func(name string, fn func() (any, error)) {

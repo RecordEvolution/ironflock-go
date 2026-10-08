@@ -10,8 +10,10 @@ import (
 	ironflock "github.com/RecordEvolution/ironflock-go"
 )
 
+// Reading is a row of the "sensordata" table; columns are matched by the json
+// tags. The data backend returns timestamps as epoch milliseconds.
 type Reading struct {
-	Tsp         string  `json:"tsp"`
+	Tsp         int64   `json:"tsp"`
 	DeviceKey   int     `json:"device_key"`
 	Temperature float64 `json:"temperature"`
 }
@@ -44,7 +46,7 @@ func main() {
 			return err
 		}
 		for _, r := range readings {
-			log.Printf("device %d: %.1f°C at %s", r.DeviceKey, r.Temperature, r.Tsp)
+			log.Printf("device %d: %.1f°C at %s", r.DeviceKey, r.Temperature, time.UnixMilli(r.Tsp).UTC())
 		}
 
 		// The last day, warm readings only.

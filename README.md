@@ -20,21 +20,33 @@ app user's fleet.
 
 ```shell
 go get github.com/RecordEvolution/ironflock-go
+go mod edit -replace=github.com/gammazero/nexus/v3=github.com/RecordEvolution/nexus/v3@v3.0.0-20261001140357-5a989b085bbb
+go mod tidy
 ```
 
 ### WAMP library
 
 The SDK speaks WAMP through RecordEvolution's fork of [nexus](https://github.com/RecordEvolution/nexus)
-(branch `v4-contrib`) — the same code [ironflock-router](https://github.com/RecordEvolution/ironflock-router) is
+(branch `v4-contrib`) — the code [ironflock-router](https://github.com/RecordEvolution/ironflock-router) is
 built on. The fork keeps the upstream module path `github.com/gammazero/nexus/v3`, so this module's `go.mod`
 wires it in with a `replace` pinned to a fork commit.
 
-Go applies `replace` directives only in the main module. An application that imports this SDK must therefore
-add the same line to its own `go.mod`, or it builds against upstream nexus:
+The `replace` line is **required** in your app's `go.mod` too. Go applies `replace` directives only in the main
+module, and the SDK does not build against upstream nexus: it uses API that only the fork has. Without the line
+Go picks upstream nexus v3.3.0, and the build fails inside the SDK:
 
+```text
+# github.com/RecordEvolution/ironflock-go/wamp
+.../wamp/peer.go:...: m.Details undefined (type *"github.com/gammazero/nexus/v3/wamp".Unregistered has no field or method Details)
 ```
+
+The second command above adds the line:
+
+```text
 replace github.com/gammazero/nexus/v3 => github.com/RecordEvolution/nexus/v3 v3.0.0-20261001140357-5a989b085bbb
 ```
+
+When you upgrade the SDK, keep the pinned commit in step with the one in this module's `go.mod`.
 
 ## Usage
 
@@ -80,7 +92,9 @@ func main() {
 More in [examples/](examples).
 
 Every network operation takes a `context.Context` and is safe to call from many goroutines. `Start` (and
-`Run`) block until the app's realm is joined; operations issued before that wait for the connection.
+`Run`) block until the app's realm is joined. Operations issued before that — by a goroutine started before
+`Run`, say — wait for `Start` and then for the connection, within the time they wait for a connection anyway
+(see [Connection reliability](#connection-reliability)); `Stop` ends that wait with `wamp.ErrStopped`.
 
 ### Arguments and keyword arguments
 
@@ -94,9 +108,14 @@ ifl.PublishToTable(ctx, "inspections", ironflock.Kwargs{"part_id": "1"})  // kwa
 ifl.Call(ctx, "com.example.proc", 1, 2, ironflock.Kwargs{"scale": 10})    // args [1, 2], kwargs {"scale": 10}
 ```
 
-Values can be maps, slices and scalars, or structs: a struct (and `time.Time`) is converted through
-`encoding/json`, so its fields are named by their `json` tags and times become RFC 3339 strings — the shape
-the platform receives from Python and JavaScript apps.
+Values can be maps, slices and scalars, or structs. They are converted by the rules of `encoding/json` —
+struct fields named by their `json` tags, with `omitempty`, `omitzero`, `-`, `,string` and embedded structs,
+and `MarshalJSON`/`MarshalText` methods used — so the platform receives the shape Python and JavaScript apps
+send. Three things differ from `encoding/json`, as in the Python SDK:
+
+- Floats stay floats: `2.0` is not sent as the integer `2`, and NaN and ±Inf are sent as they are.
+- `[]byte` is sent as binary (msgpack bin, like Python `bytes`), not as a base64 string.
+- Every `time.Time`, wherever it is, becomes an RFC 3339 string in UTC (`"2026-01-02T03:04:05.123Z"`).
 
 ```go
 type Reading struct {
@@ -106,8 +125,13 @@ type Reading struct {
 ifl.PublishToTable(ctx, "sensordata", Reading{Temperature: 22.5, Tsp: time.Now()})
 ```
 
-Received payloads use `map[string]any`, `[]any`, `string`, `int64`, `float64`, `bool` and `nil`.
-`ironflock.Decode[T]`, `ironflock.DecodeRows[T]` and `Result.Decode` convert them into your own types.
+Received payloads use `map[string]any`, `[]any`, `string`, `int64`, `float64`, `bool`, `[]byte` and `nil`
+(`uint64` for integers above `math.MaxInt64`). A number arrives as `int64` when its sender encoded it as an
+integer. The data backend does so for every whole number, so in table rows a numeric column holding 22 reads
+as `int64(22)` and 22.5 as `float64`; timestamp columns, `tsp` included, arrive as epoch milliseconds.
+`ironflock.Decode[T]`, `ironflock.DecodeRows[T]` and `Result.Decode` convert payloads into your own types
+through `encoding/json`, so a `float64` field takes either kind of number. NaN and ±Inf decode as JSON null
+does: a `float64` field keeps 0, a `*float64` field stays nil.
 
 ## Options
 
@@ -126,11 +150,12 @@ override it:
 | `WithURL(u)` | `DEVICE_ENDPOINT_URL` | Router WebSocket URL, e.g. `wss://cbw.ironflock.com/ws-ua-usr`. Without it the URL comes from `DEVICE_ENDPOINT_URL` (path replaced by `/ws-ua-usr`), then from the studio URL |
 | `WithReswarmURL(u)` | `RESWARM_URL` | Studio URL used to look up the router of a known IronFlock deployment |
 | `WithCredentials(id, secret)` | `APP_AUTH_ID`, `APP_AUTH_SECRET` | WAMP-CRA credential. By default the per-app credential the agent injects is used (read from `/data/env` first, so a rotated credential is picked up on the next reconnect), falling back to the device serial number |
-| `WithReconnectWindow(d)` | | How long a table operation rides out a platform restart before it fails (default 60 s; 0 turns it off). See [Connection reliability](#connection-reliability) |
+| `WithReconnectWindow(d)` | | How long a table operation waits for the connection — after a platform restart, or before `Start` — and retries while the data backend comes back, before it fails (default 60 s; 0 turns it off). See [Connection reliability](#connection-reliability) |
 | `WithLogger(l)` | | `*slog.Logger` for connection lifecycle logs (default `slog.Default()`) |
 
 Missing `DEVICE_KEY`, `APP_NAME`, `SWARM_KEY` or `APP_KEY` are logged as a warning; the operations that need
-them fail with an error wrapping `ironflock.ErrMissingConfig`.
+them fail with an error wrapping `ironflock.ErrMissingConfig`. Without `SWARM_KEY` or `APP_KEY`, `Start` fails
+at once: the app's realm could never be joined.
 
 ## API Reference
 
@@ -138,14 +163,15 @@ them fail with an error wrapping `ironflock.ErrMissingConfig`.
 
 | Method | Description |
 |--------|-------------|
-| `New(opts ...Option) (*IronFlock, error)` | Creates an instance from the environment and options |
-| `Start(ctx) error` | Connects and blocks until the app's realm is joined. A realm that does not exist yet (the data backend is still being provisioned) is waited for |
-| `Stop(ctx) error` | Closes every consumed-app connection and the connection itself. Idempotent |
-| `Run(ctx, main func(ctx) error) error` | `Start`, run `main` (or wait for `ctx`), `Stop`. Stops on SIGINT/SIGTERM and cancels `main`'s context |
+| `New(opts ...Option) (*IronFlock, error)` | Creates an instance from the environment and options; does not connect |
+| `Start(ctx) error` | Connects and blocks until the app's realm is joined. A realm that does not exist yet (the data backend is still being provisioned) is waited for. A `Start` that failed (`ctx` ended first, say) may be called again. On a started or starting instance it fails with `ErrAlreadyStarted`, after `Stop` with `wamp.ErrStopped` |
+| `Stop(ctx) error` | Closes every consumed-app connection and the connection itself, within `ctx`. Idempotent and final: operations then fail with `wamp.ErrStopped`, those still waiting for `Start` included, and `Run` returns once `main` does |
+| `Run(ctx, main func(ctx) error) error` | `Start`, run `main` (or wait), `Stop` (within 10 s). `main`'s context is cancelled when `ctx` ends, on SIGINT or SIGTERM, and by `Stop` from anywhere; once shutdown has begun, a second signal terminates the process. Returns `main`'s error, or the `Start` error. On a started instance it fails with `ErrAlreadyStarted` and leaves it running |
 | `IsConnected() bool` | Whether the connection is currently established |
 | `Files() *filestore.FileStore` | The app's managed object storage — see [Managed File Storage](#managed-file-storage) |
-| `Connection() *wamp.Connection` | The underlying connection, for advanced use |
-| `Stage()`, `SerialNumber()`, `DeviceKey()`, `DeviceName()`, `AppName()`, `SwarmKey()`, `AppKey()` | The resolved identity |
+| `Connection() *wamp.Connection` | The underlying connection, for advanced use — see [Advanced usage](#advanced-usage) |
+| `Stage()` | The stage of the app's realm: `StageDevelopment` (`"DEV"`) or `StageProduction` (`"PROD"`). The cross-app API writes stages in lower case (`"dev"`, `"prod"`; `Stage.Lower()`) |
+| `SerialNumber()`, `DeviceKey()`, `DeviceName()`, `AppName()`, `SwarmKey()`, `AppKey()` | The resolved identity |
 
 ### `Publish(ctx, topic, args ...any) error`
 
@@ -217,17 +243,22 @@ sub, err := ifl.Subscribe(ctx, "com.myapp.mytopic", func(ev *ironflock.Event) {
 defer ifl.Unsubscribe(ctx, sub)
 ```
 
-Each subscription delivers its events in order on its own goroutine, so a handler may call any other method,
-including `Call`. A slow handler delays only its own subscription. Use your own topic names — see
-[URIs an app may use](#uris-an-app-may-use). `SubscribeOptions{Match: "prefix"}` subscribes to a prefix.
+Each subscription delivers its events in order, one at a time, on its own goroutine, so a handler may call any
+other method, including `Call`. A slow handler delays only its own subscription. Subscriptions that must not
+run their handlers concurrently share a delivery group: pass the same `wamp.NewDeliveryGroup()` as
+`SubscribeOptions.Group` to each, and they deliver one event at a time across all of them, in the order the
+events arrive. `Unsubscribe` takes effect at once: the handler is called for no further event. Use your own
+topic names — see [URIs an app may use](#uris-an-app-may-use). `SubscribeOptions{Match: "prefix"}` subscribes
+to a prefix.
 
 ### `SubscribeToTable(ctx, table, handler, opts ...SubscribeOptions) (*TableSubscription, error)`
 
 Subscribes to the stored rows of a table: the data backend's realtime feed `transformed.<table>` and its bulk
 counterpart `transformed.bulk.<table>`. Each event carries one row as stored — values typed to the
 data-template columns, secret columns masked — in `ev.Args[0]` (`ev.Row()`). Rows of a bulk insert arrive as
-one event per row, so handler code stays the same. `TableSubscription.Unsubscribe` removes both
-subscriptions.
+one event per row, so handler code stays the same. The handler is called one event at a time, in the order the
+events arrive on both feeds: it never runs concurrently with itself. `TableSubscription.Unsubscribe` removes
+both subscriptions; no handler call starts after it.
 
 ```go
 ts, err := ifl.SubscribeToTable(ctx, "sensordata", func(ev *ironflock.Event) {
@@ -269,16 +300,25 @@ live, err := ifl.GetHistory(ctx, "parts", &ironflock.TableQueryParams{
 |-------|-------------|
 | `Limit` | Maximum number of rows, 1–10000 (required) |
 | `Offset` | Rows to skip |
-| `TimeRange` | `&TimeRange{Start, End}`: ISO 8601 strings, `time.Time`, or epoch-millisecond integers; `nil` for an open end (`Between`, `Since`, `Until` build one from `time.Time`) |
+| `TimeRange` | `&TimeRange{Start, End}`; each bound a `time.Time`, an ISO 8601 string, an epoch-milliseconds number, or `nil` for an open end (`Between`, `Since`, `Until` build one from `time.Time`). Strings and numbers cannot be mixed |
 | `FilterAnd` | AND-ed filters: `Where(column, operator, value)`, `IsNull`, `IsNotNull`, the `Latest()` marker, `Or(...)`/`And(...)` groups |
 | `Columns` | Columns to return (`tsp`, `device_key` and `authid` are always included); `nil` for all |
+
+A `time.Time` bound is sent as RFC 3339 in UTC. A string bound is sent exactly as given, and the data backend
+reads it with JavaScript's `Date`, so the SDK accepts the extended ISO 8601 forms `Date` reads correctly: a
+date (`2026`, `2026-07`, `2026-07-01`), or a date and a time of day (`2026-07-01T12:30`, `2026-07-01T12:30:15`,
+`2026-07-01T12:30:15.250`; `T`, `t` or a space between them) with an optional `Z` or UTC offset (`+02:00` or
+`+0200`). A time without either is read as UTC. Other strings — basic format (`20260701T123000Z`), hours
+without minutes, offsets of hours only, days a month does not have (`2026-02-30`) — fail with
+`ErrInvalidArgument` before anything is sent.
 
 Operators: `=`, `!=`, `<>`, `>`, `<`, `>=`, `<=`, `LIKE`, `ILIKE`, `NOT LIKE`, `NOT ILIKE`, `IN`, `NOT IN`,
 `IS NULL`, `IS NOT NULL`. `IN`/`NOT IN` take a slice. `IS NULL` and `IS NOT NULL` take no value and are the
 only way to ask about NULL. Columns your data template declares `secret: true` come back as
 `ironflock.SecretPlaceholder`.
 
-`ironflock.DecodeRows[T](rows)` converts rows into a slice of your own struct type.
+`ironflock.DecodeRows[T](rows)` converts rows into a slice of your own struct type (decode `tsp` into an
+`int64`: it arrives as epoch milliseconds).
 
 ### `GetSeriesHistory(ctx, table, q SeriesQueryParams) ([]Row, error)`
 
@@ -310,7 +350,7 @@ Calls a function registered by another device of this app with `RegisterDeviceFu
 
 ```go
 res, err := ifl.CallDeviceFunction(ctx, 42, "com.myapp.add", 1, 2)
-sum := res.Value()
+sum := res.Value() // int64(3)
 ```
 
 ### `RegisterDeviceFunction(ctx, topic, handler, opts ...RegisterOptions) (*Registration, error)`
@@ -321,8 +361,14 @@ Registers a function other devices of this app — and dashboard widget actions 
 
 ```go
 _, err := ifl.RegisterDeviceFunction(ctx, "com.myapp.add", func(ctx context.Context, inv *ironflock.Invocation) (any, error) {
-	a, _ := inv.Args[0].(int64)
-	b, _ := inv.Args[1].(int64)
+	if len(inv.Args) != 2 {
+		return nil, errors.New("add takes two numbers")
+	}
+	a, ok1 := inv.Args[0].(int64)
+	b, ok2 := inv.Args[1].(int64)
+	if !ok1 || !ok2 {
+		return nil, fmt.Errorf("add takes two integers, got %T and %T", inv.Args[0], inv.Args[1])
+	}
 	return a + b, nil
 })
 ```
@@ -374,8 +420,15 @@ if err == nil && res.Match { /* ... */ }
 
 ## Cross-App Data Access
 
-Read another app's fleet data, in the same project and fleet. The provider app must list your app in its
-data-template `consumes:` section, and the project user must grant access. Access is **read-only**.
+Read another app's fleet data, in the same project and fleet. Your app must declare the provider app in its
+data-template `consumes:` section (or hold the wildcard grant, `consumes: [{app: "*"}]`), and the project user
+must grant access. Access is **read-only**.
+
+```yaml
+# .ironflock/data-template.yml of your app
+consumes:
+  - app: weather-app
+```
 
 ```go
 weather, err := ifl.ConnectToApp(ctx, "weather-app")
@@ -393,13 +446,15 @@ _, err = weather.SubscribeToTable(ctx, "forecasts", func(ev *ironflock.Event) { 
 
 | Method | Description |
 |--------|-------------|
-| `ConnectToApp(ctx, app, opts ...ConnectToAppOptions) (*ConsumedApp, error)` | Opens (or returns the cached) read-only handle. `Stage` selects `dev`/`prod` (default: this app's stage); `OnError` is called when an open handle is later denied (e.g. the grant was revoked) |
+| `ConnectToApp(ctx, app, opts ...ConnectToAppOptions) (*ConsumedApp, error)` | Opens (or returns the cached) read-only handle. `Stage` selects `"dev"`/`"prod"` (default: this app's stage); `OnError` is called when an open handle is later denied (e.g. the grant was revoked) |
 | `ListConsumableApps(ctx) ([]ConsumedAppInfo, error)` | Lists every non-private provider and its catalog without connecting (wildcard consumers) |
 | `ConnectToAllApps(ctx, opts ...ConnectToAllAppsOptions) ([]*ConsumedApp, error)` | Opens every provider with a data backend for the stage (wildcard consumers). Failures go to `OnError` unless `StopOnError` is set |
 | `(*ConsumedApp).GetHistory`, `GetSeriesHistory`, `SubscribeToTable` | As for your own tables (series: tables only) |
 | `(*ConsumedApp).Close(ctx)` | Closes the handle; `Stop` closes all of them |
 
-Handles are cached per app and stage, and concurrent opens share one attempt. Errors are
+Handles are cached per app and stage, and concurrent opens share one attempt; `ctx` bounds only the caller's
+wait. `ConsumedApp.Stage` is the stage in lower case (`"dev"` or `"prod"`), unlike `IronFlock.Stage()`.
+`Stop` aborts opens still in flight: they fail with an error wrapping `wamp.ErrStopped`. Errors are
 `*CrossAppAccessError` with a `Code`: `NO_GRANT`, `PROVIDER_NOT_INSTALLED`, `UNKNOWN_APP`, `PRIVATE_TABLE`
 (not in the provider's shared catalog), `SECRET_COLUMN` (a query filters on or selects a column the provider
 marks secret — including inside filter groups), `NOT_AUTHORIZED`.
@@ -442,18 +497,31 @@ for obj, err := range files.Iter(ctx, filestore.Prefix("2026/")) {
 Options: `filestore.Namespace(n)` (default `"default"`), `ContentType`, `ToNamespace`, `Version`, `TTL`,
 `Size`, `Prefix`, `Limit`, `Cursor`, `Detail`.
 
+`Files()` does no I/O and may be called before `Start`. A file call waits up to 10 s for the connection (before
+`Start` as well) and is not retried: unlike table operations, file calls do not use the reconnect window, so
+during a platform restart a call can fail with `NOT_AVAILABLE` until the file service has registered again.
+
 Objects up to the server's `InlineMaxBytes` (6 MiB) travel through the router; larger ones go directly to the
 object store over HTTPS through presigned URLs (`PutReader`, `PutFile`, `GetTo` and `GetToFile` stream, so a
 multi-gigabyte object never has to fit in memory). The direct path needs the device to reach the object store
-host; HTTP(S) proxies from the environment are honoured.
+host; HTTP(S) proxies from the environment are honoured. `Stop` closes the idle connections of the store's HTTP
+client (`FileStore.CloseIdleConnections` does that for a store you create with `filestore.New(caller, nil)`).
+
+`GetToFile` downloads into a temporary file next to the target and renames it into place once complete, so a
+failed download never leaves a partial file and keeps the previous one; the replaced file's permission bits are
+kept. Because the file is replaced rather than rewritten, its directory must be writable, and other hard links
+to it keep the old content. Symbolic links are followed, as Python's `open(path, "wb")` follows them: the file
+they lead to is replaced (created when the last link dangles) and the links stay. A FIFO or a device is written
+in place as the object streams in, and a file that is a mount point (a single file bind-mounted into the
+container) is overwritten once the download is complete.
 
 A failure of the file service or of a direct transfer is a `*filestore.Error` with a stable `Code` — branch on
 it, never on `Reason` (a cancelled context, local file errors and router-level WAMP errors other than the ones
 below come back as they are):
 `NOT_AUTHORIZED`, `NO_SUCH_NAMESPACE`, `NO_SUCH_OBJECT`, `TOO_LARGE`, `OBJECT_TOO_LARGE`, `QUOTA_EXCEEDED`,
-`CONTENT_TYPE_NOT_ALLOWED`, `NOT_SUPPORTED`, `NOT_AVAILABLE` (no file service on this deployment),
-`PRESIGN_UNREACHABLE` (object store not reachable directly — a proxy?), `CLOCK_SKEW` (device clock too far
-off; check NTP), `INTERNAL`. A newer server may add codes; they pass through as-is.
+`CONTENT_TYPE_NOT_ALLOWED`, `NOT_SUPPORTED`, `NOT_AVAILABLE` (no file service on this deployment, or not yet
+after a restart), `PRESIGN_UNREACHABLE` (object store not reachable directly — a proxy?), `CLOCK_SKEW` (device
+clock too far off; check NTP), `INTERNAL`. A newer server may add codes; they pass through as-is.
 
 ## URIs an app may use
 
@@ -465,23 +533,25 @@ connection. A refused action fails with `wamp.error.not_authorized` (`ironflock.
 | URI on your own realm | Allowed | SDK method |
 |-----------------------|---------|------------|
 | Your own names, e.g. `com.myapp.status` | publish, subscribe (prefix subscriptions too), call; never register | `Publish`, `Subscribe`, `Call` |
-| `<SWARM_KEY>.<APP_KEY>.<table>`, `bulk.<SWARM_KEY>.<APP_KEY>.<table>` | publish (never subscribe) | `PublishToTable`, `ReportError`, `PublishRowsToTable` |
+| `<SWARM_KEY>.<APP_KEY>.<table>`, `bulk.<SWARM_KEY>.<APP_KEY>.<table>` | publish only (never subscribe) | `PublishToTable`, `ReportError`, `PublishRowsToTable` |
 | `transformed.<table>`, `transformed.bulk.<table>` | subscribe only | `SubscribeToTable` |
+| `databackend.errors.…`, `files.events…` | subscribe only | – (the data backend's error and file events) |
 | `<SWARM_KEY>.<DEVICE_KEY>.<APP_KEY>.<STAGE>.<name>` | register (single), call, publish | `RegisterDeviceFunction`, `CallDeviceFunction` |
 | `append.…`, `appendBulk.…`, `history.transformed.…`, `secret.reveal.…`, `secret.verify.…`, `files.read.…`, `files.write.…` | call (the SDK calls them) | table, history, secret and file APIs |
 | `sys.appaccess.list`, `sys.appaccess.resolve` | call | `ListConsumableApps`, `ConnectToApp`, `ConnectToAllApps` |
 
-**Identity-checked names.** For device-function URIs and table write topics the router also checks the
-identity they carry: only the device a function URI names may register it, with your realm's swarm key, app key
-and stage. Let the SDK build these URIs (`RegisterDeviceFunction`, `CallDeviceFunction`, `PublishToTable`).
+**Identity-checked names.** Names that start with a digit — the table write topics and the device-function
+URIs — also pass the platform's identity check: only the device a function URI names may register it (or
+publish on it), and only with your realm's swarm key, app key and stage; a table write topic must carry your
+realm's swarm key and app key. Prefix and wildcard patterns over these names are refused. Let the SDK build
+these URIs (`RegisterDeviceFunction`, `CallDeviceFunction`, `PublishToTable`).
 
-**Reserved names.** On the data realm the router refuses `sys.` (apart from `sys.appaccess.*`) and `wamp.`
-(apart from `wamp.session.get`). The first segments `reswarm.`, `reacct.`, `re.mgmt.`, `re.tunnel.`,
-`ironflock.`, `instance.`, `cloud.instance.`, `alarms.`, `tunnel.`, `svc.`, `dev.`, `uplink.`, `auth.`,
-`truncate_tables.`, `table_info.` and `history.errors.` belong to the platform: they may pass today, but do not
-build on them. Do not start your own names with a digit, `bulk.`, `transformed.`, `databackend.errors.` or
-`files.events` either. Nobody subscribes to raw table topics: they carry the row as sent, including the
-plaintext of secret columns — use `SubscribeToTable`.
+**Reserved names.** The router refuses `sys.` apart from the two cross-app procedures above, and `wamp.` apart
+from `wamp.session.get` (the JavaScript SDK's heartbeat). The other names in the table belong to the platform:
+do not start your own names with a digit, `bulk.`, `transformed.`, `databackend.errors.`, `files.`, `append.`,
+`appendBulk.`, `history.` or `secret.`. Every other first segment is your app's own topic space. Nobody
+subscribes to raw table topics: they carry the row as sent, including the plaintext of secret columns — use
+`SubscribeToTable`.
 
 ## Connection reliability
 
@@ -501,25 +571,36 @@ intervals, then reconnects. This covers subscribe-only apps and cross-app connec
 
 Table operations (`PublishToTable`, `AppendToTable`, the bulk variants, `ReportError`, the history, series
 and secret reads, and a consumed app's history reads) ride out a platform restart: they wait up to the
-reconnect window (default 60 s) for the connection to come back and retry while the data backend has not
-re-registered its procedures yet. Other operations wait up to 10 s for a connection.
+reconnect window (default 60 s) for the connection to come back, and retry while the data backend has not
+registered its procedures again yet. Other operations — `Publish`, `Subscribe`, `Call`, the device functions,
+cross-app discovery and file calls — wait up to 10 s for a connection and are not retried. An operation issued
+before `Start` waits for `Start` within the same time. When the time is up, the operation fails with an error
+wrapping `wamp.ErrNotConnected`.
 
 ## Errors
 
 | Error | Test with | Meaning |
 |-------|-----------|---------|
-| `ironflock.ErrInvalidArgument` | `errors.Is` | Invalid parameters (the Python SDK's `ValueError`) |
-| `ironflock.ErrMissingConfig` | `errors.Is` | `SWARM_KEY`, `APP_KEY` or `DEVICE_KEY` is not set |
-| `*ironflock.OperationError` | `errors.As` | A failed operation; the message names the operation and the WAMP error |
+| `ironflock.ErrInvalidArgument` | `errors.Is` | Invalid parameters (the Python SDK's `ValueError`), reported before anything is sent |
+| `ironflock.ErrMissingConfig` | `errors.Is` | Identity the operation needs is missing: the serial number (`New`), `SWARM_KEY` or `APP_KEY` (`Start`, table operations), a device key (device functions) |
+| `ironflock.ErrAlreadyStarted` | `errors.Is` | `Start` or `Run` on an instance that is started or starting |
+| `wamp.ErrNotConnected` | `errors.Is` | No connection within the operation's wait (see [Connection reliability](#connection-reliability)) |
+| `wamp.ErrStopped` | `errors.Is` | Stopped for good: an operation, `Start` or `ConnectToApp` after `Stop` or interrupted by it, or a consumed app after `Close` or a revoked grant |
+| `wamp.ErrNotConfigured` | `errors.Is` | `ifl.Connection()` used before `Start` configured it (the `IronFlock` methods wait for `Start` instead) |
+| `*ironflock.OperationError` | `errors.As` | A failed operation; the message names the operation and the cause, which it wraps |
 | `*wamp.Error` (`ironflock.WampError`) | `errors.As`, `ironflock.WampURI(err)` | The router or callee refused; carries the URI and payload |
 | `*ironflock.CrossAppAccessError` | `errors.As` | Cross-app access was declined or misused (`Code`) |
-| `*filestore.Error` | `errors.As` | A file operation failed (`Code`) |
-| `wamp.ErrNotConnected` | `errors.Is` | No connection within the wait window |
+| `*filestore.Error` (`ironflock.FileStoreError`) | `errors.As` | A file operation failed (`Code`) |
+
+`errors.Is` and `errors.As` see through `*OperationError`: `errors.Is(err, wamp.ErrStopped)` holds for a
+`PublishToTable` after `Stop`.
 
 ## Advanced usage
 
 `ifl.Connection()` is the underlying `*wamp.Connection`, a self-healing WAMP session with the methods
-`Call`, `Publish`, `Subscribe`, `Register` and friends; it can also be used on its own. The rules in
+`Call`, `Publish`, `Subscribe`, `Register` and friends; it can also be used on its own (see
+[examples/connection](examples/connection)). Unlike the `IronFlock` methods, its operations do not wait for
+`Start`: until `Start` has configured the connection they fail with `wamp.ErrNotConfigured`. The rules in
 [URIs an app may use](#uris-an-app-may-use) apply to it as well.
 
 ## Differences from the Python and JavaScript SDKs
@@ -529,22 +610,31 @@ it takes the more robust variant; Go-specific choices:
 
 - Every operation takes a `context.Context`; durations are `time.Duration`.
 - Arguments are variadic with a `Kwargs` marker instead of `*args, **kwargs` / `(args, kwargs)`.
+- Operations issued before `Start` wait for it within their window (as JavaScript waits); Python fails them at
+  once.
 - `SubscribeToTable` returns a handle that unsubscribes both the row and the bulk subscription.
 - `VerifySecret` returns `{Match, Checked}` (as JavaScript); Python returns only the boolean.
 - Filter groups (`Or`/`And`) are supported (as JavaScript), and the cross-app secret-column guard also looks
   inside them.
 - Liveness uses WebSocket pings (as Python); the JavaScript SDK uses a WAMP heartbeat because browsers have no
   ping API.
+- There are no retained-event options (`get_retained`, `retain`): ironflock-router does not keep retained
+  events. Raw WAMP options still pass through `SubscribeOptions.Extra` and `PublishOptions.Extra`.
 
 ## Development
 
 ```shell
-go test -race ./...           # unit tests
-go vet ./...
+just test               # unit tests with the race detector (go test -race -count=1 ./...)
+just check              # go vet, golangci-lint, cross-builds for the device platforms, go mod tidy -diff
+just coverage           # unit test coverage summary
+just test-integration   # end-to-end suites against ironflock-router (ROUTER_IMAGE, or ROUTER_BIN and ROUTER_REF_CONFIG)
 ```
 
-End-to-end tests against ironflock-router, a fake IronFlock platform and the Python/JavaScript SDKs
-live in [integration/](integration); see its README.
+The unit tests need nothing external: they run against an in-process nexus router. The end-to-end tests run
+against [ironflock-router](https://github.com/RecordEvolution/ironflock-router) and a fake IronFlock platform,
+call across to the Python SDK, and compare the wire payloads with the Python SDK's run of the same scenario.
+They live in [integration/](integration), whose README covers the harness, the environment variables and CI;
+the [Justfile](Justfile) lists every task.
 
 ## License
 
