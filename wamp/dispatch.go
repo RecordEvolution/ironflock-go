@@ -66,12 +66,28 @@ func (e *serialExecutor) run() {
 	}
 }
 
+// DeliveryGroup makes several subscriptions deliver their events as one
+// subscription does: one at a time, in the order they arrive, across all of
+// them — a handler of one never runs while a handler of another one is
+// running. Pass the same group as SubscribeOptions.Group to each; the
+// subscriptions may have different topics and handlers. Events still queued
+// for a subscription when it is unsubscribed are dropped.
+//
+// A slow handler delays the events of every subscription in the group. A
+// group holds a goroutine only while it has events to deliver.
+type DeliveryGroup struct {
+	queue serialExecutor
+}
+
+// NewDeliveryGroup returns a new, empty DeliveryGroup.
+func NewDeliveryGroup() *DeliveryGroup { return &DeliveryGroup{} }
+
 // subGroup is the WAMP subscription behind every Subscription of one topic.
 // nexus keys event handlers by topic, so handlers of the same topic must
 // share one WAMP subscription; the group fans its events out.
 //
-// handles is copy-on-write (written under Connection.stateMu) because
-// onEvent runs on the nexus receive loop and must not wait for stateMu,
+// handles is copy-on-write (written while Connection.state is held) because
+// onEvent runs on the nexus receive loop and must not wait for that lock,
 // which is held across router round trips.
 type subGroup struct {
 	topic   string
@@ -89,16 +105,22 @@ func (g *subGroup) list() []*Subscription {
 	return nil
 }
 
-// add and remove must be called with Connection.stateMu held.
+// wanted reports whether a handler of the group has not been unsubscribed.
+// Once none is left the group is removed as soon as its removal gets the
+// connection's state lock.
+func (g *subGroup) wanted() bool {
+	return slices.ContainsFunc(g.list(), func(s *Subscription) bool { return !s.removed.Load() })
+}
+
+// add and remove must be called with Connection.state held.
 func (g *subGroup) add(s *Subscription) {
 	hs := append(slices.Clone(g.list()), s)
 	g.handles.Store(&hs)
 }
 
-func (g *subGroup) remove(s *Subscription) (remaining int) {
+func (g *subGroup) remove(s *Subscription) {
 	hs := slices.DeleteFunc(slices.Clone(g.list()), func(h *Subscription) bool { return h == s })
 	g.handles.Store(&hs)
-	return len(hs)
 }
 
 // onEvent is the nexus event handler. It runs on the client's receive loop,
@@ -110,6 +132,8 @@ func (g *subGroup) onEvent(raw *nxwamp.Event) {
 	}
 }
 
+// deliver queues raw for the subscription's handler: on its own executor, or
+// its DeliveryGroup's.
 func (s *Subscription) deliver(raw *nxwamp.Event) {
 	if s.removed.Load() {
 		return
@@ -139,8 +163,14 @@ func (c *Connection) runEventHandler(s *Subscription, ev *Event) {
 }
 
 // invoke is the nexus invocation handler of a registration. nexus runs it on
-// a goroutine of its own per invocation.
+// a goroutine of its own per invocation. Once the registration is removed it
+// refuses the call as the router does when no callee has the procedure (see
+// Connection.Unregister).
 func (r *Registration) invoke(ctx context.Context, raw *nxwamp.Invocation) client.InvokeResult {
+	if r.removed.Load() {
+		return client.InvokeResult{Err: URINoSuchProcedure, Args: nxwamp.List{
+			fmt.Sprintf("procedure '%s' has been unregistered", r.procedure)}}
+	}
 	inv := &Invocation{
 		Procedure: r.procedure,
 		Args:      normalizeList(raw.Arguments),

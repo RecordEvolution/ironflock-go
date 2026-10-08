@@ -47,9 +47,162 @@ func TestPrimaryConnectionRetriesWrongSecret(t *testing.T) {
 	if n := len(tr.auth.attempts()); n < 2 {
 		t.Fatalf("join attempts = %d, want retries", n)
 	}
-	// A failed Start stops the connection.
-	if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrStopped) {
-		t.Fatalf("WaitSession after failed Start = %v, want ErrStopped", err)
+	// A failed Start stops the supervisor, not the connection: it is
+	// configured and waits to be started again.
+	if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("WaitSession after failed Start = %v, want ErrNotConnected", err)
+	}
+	// Once the router accepts the secret, a new Start joins.
+	tr.keys.set(testAuthID, "wrong")
+	if err := c.Start(ctxTimeout(t, 5*time.Second)); err != nil {
+		t.Fatalf("Start after a failed Start: %v", err)
+	}
+	if !c.IsOpen() {
+		t.Fatal("not open after the second Start")
+	}
+}
+
+// A non-fatal failed Start leaves the connection configured but not
+// started: no further attempts are made, operations wait for a session, and
+// Start may be called again — whatever ended the first one.
+func TestStartAfterFailedStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		opt     connOption
+		ctx     func(t *testing.T) context.Context
+		wantErr func(error) bool
+	}{
+		{
+			name:    "ctx deadline while the realm is missing",
+			ctx:     func(t *testing.T) context.Context { return ctxTimeout(t, 200*time.Millisecond) },
+			wantErr: func(err error) bool { return errors.Is(err, context.DeadlineExceeded) },
+		},
+		{
+			name: "ctx cancelled before Start",
+			ctx: func(t *testing.T) context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			wantErr: func(err error) bool { return errors.Is(err, context.Canceled) },
+		},
+		{
+			name: "first-connect timeout with FailOnAuthError",
+			opt: func(cfg *Config, _ *Connection) {
+				cfg.FailOnAuthError = true
+				cfg.FirstConnectTimeout = 300 * time.Millisecond
+			},
+			ctx:     func(*testing.T) context.Context { return context.Background() },
+			wantErr: func(err error) bool { return errors.Is(err, ErrNotConnected) && !errors.Is(err, ErrStopped) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newTestRouter(t, false)
+			var opts []connOption
+			if tt.opt != nil {
+				opts = append(opts, tt.opt)
+			}
+			c, logs := newTestConn(t, tr, opts...)
+
+			err := c.Start(tt.ctx(t))
+			if !tt.wantErr(err) {
+				t.Fatalf("first Start = %v", err)
+			}
+			if !closed(c.done) {
+				t.Fatal("supervisor still running after Start returned")
+			}
+			// Count upgrade requests: without the realm no join gets further.
+			n := len(tr.protocols())
+			time.Sleep(60 * time.Millisecond) // several retry periods
+			if len(tr.protocols()) != n {
+				t.Fatal("still connecting after a failed Start")
+			}
+			if c.IsOpen() {
+				t.Fatal("open after a failed Start")
+			}
+			if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrNotConnected) {
+				t.Fatalf("WaitSession after a failed Start = %v, want ErrNotConnected", err)
+			}
+
+			tr.addRealm()
+			if err := c.Start(ctxTimeout(t, 5*time.Second)); err != nil {
+				t.Fatalf("second Start: %v\n%s", err, logs)
+			}
+			if !c.IsOpen() {
+				t.Fatal("not open after the second Start")
+			}
+			err = c.Publish(ctxTimeout(t, 5*time.Second), "after.restart", nil, nil, &PublishOptions{Acknowledge: true}, 0)
+			if err != nil {
+				t.Fatalf("Publish after the second Start: %v", err)
+			}
+		})
+	}
+}
+
+// An operation waiting for a session outlives a failed Start: it is served
+// by the session of the next Start within its window.
+func TestOperationWaitsAcrossFailedStart(t *testing.T) {
+	tr := newTestRouter(t, false)
+	c, _ := newTestConn(t, tr) // the default 10s session wait
+	handler, events := eventCollector(4)
+	subscribed := make(chan error, 1)
+	go func() {
+		_, err := c.Subscribe(context.Background(), "across.restart", handler, nil)
+		subscribed <- err
+	}()
+
+	if err := c.Start(ctxTimeout(t, 200*time.Millisecond)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Start = %v, want deadline exceeded", err)
+	}
+	noRecv(t, subscribed, "Subscribe outcome before the next Start")
+
+	tr.addRealm()
+	if err := c.Start(ctxTimeout(t, 5*time.Second)); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if err := recv(t, subscribed, "Subscribe"); err != nil {
+		t.Fatalf("Subscribe across the failed Start: %v", err)
+	}
+	localPublish(t, tr.local(t), "across.restart", nxwamp.List{"hello"}, nil)
+	if ev := recv(t, events, "event"); ev.Args[0] != "hello" {
+		t.Fatalf("event = %+v", ev)
+	}
+}
+
+// Stop is final even when it races a failing Start: whichever finishes
+// first, the connection ends up stopped and Start returns ErrStopped.
+func TestStopRacingFailedStartIsFinal(t *testing.T) {
+	tr := newTestRouter(t, false)
+	for i := range 20 {
+		c, _ := newTestConn(t, tr)
+		ctx, cancel := context.WithCancel(context.Background())
+		started := make(chan error, 1)
+		before := len(tr.protocols())
+		go func() { started <- c.Start(ctx) }()
+		if i%4 != 0 { // otherwise possibly before the first attempt
+			eventually(t, 5*time.Second, "an attempt", func() bool { return len(tr.protocols()) > before })
+		}
+		stopped := make(chan error, 1)
+		if i%2 == 0 {
+			go cancel()
+			go func() { stopped <- c.Stop(ctxTimeout(t, 5*time.Second)) }()
+		} else {
+			go func() { stopped <- c.Stop(ctxTimeout(t, 5*time.Second)) }()
+			go cancel()
+		}
+		if err := recv(t, stopped, "Stop"); err != nil {
+			t.Fatalf("round %d: Stop: %v", i, err)
+		}
+		if err := recv(t, started, "Start"); err == nil {
+			t.Fatalf("round %d: Start succeeded without a realm", i)
+		}
+		if err := c.Start(ctxTimeout(t, 5*time.Second)); !errors.Is(err, ErrStopped) {
+			t.Fatalf("round %d: Start after Stop = %v, want ErrStopped", i, err)
+		}
+		if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrStopped) {
+			t.Fatalf("round %d: WaitSession after Stop = %v, want ErrStopped", i, err)
+		}
 	}
 }
 
@@ -90,6 +243,14 @@ func TestFailOnAuthErrorStopsAtWrongSecret(t *testing.T) {
 	}
 	if _, err := c.Call(context.Background(), "x.y", nil, nil, nil, 0); !errors.Is(err, ErrStopped) {
 		t.Fatalf("Call after fatal auth = %v", err)
+	}
+	// A fatal denial is final: Start cannot be retried.
+	err = c.Start(ctxTimeout(t, 5*time.Second))
+	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) {
+		t.Fatalf("Start after fatal auth = %v, want ErrStopped wrapping *AuthError", err)
+	}
+	if n := len(tr.auth.attempts()); n != 1 {
+		t.Fatalf("join attempts after the retried Start = %d, want 1", n)
 	}
 }
 
@@ -284,14 +445,14 @@ func TestFirstConnectTimeoutWithFailOnAuthError(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("Start took %v", time.Since(start))
 	}
-	// Torn down: no further attempts.
+	// Torn down: no further attempts, but not stopped for good.
 	n := len(tr.auth.attempts())
 	time.Sleep(60 * time.Millisecond)
 	if len(tr.auth.attempts()) != n {
 		t.Fatal("still connecting after a failed Start")
 	}
-	if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrStopped) {
-		t.Fatalf("WaitSession = %v, want ErrStopped", err)
+	if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("WaitSession = %v, want ErrNotConnected", err)
 	}
 }
 
@@ -508,6 +669,82 @@ func TestStopSendsGoodbye(t *testing.T) {
 	recv(t, left, "session leave")
 	if el := time.Since(start); el > time.Second {
 		t.Fatalf("Stop took %v", el)
+	}
+}
+
+// Stop does not wait for the network once the GOODBYE cannot be sent: not
+// past its own deadline, and not past the response timeout. The WebSocket
+// peer's Close waits for its writer, and a write stuck on a full socket
+// buffer (a dead link that did not reset the connection) gives up only at
+// its 60s deadline.
+func TestStopDoesNotWaitForStuckWriter(t *testing.T) {
+	tests := []struct {
+		name    string
+		ctx     func(t *testing.T) context.Context
+		wantErr error
+		within  time.Duration
+	}{
+		{"past its deadline", func(t *testing.T) context.Context { return ctxTimeout(t, 200*time.Millisecond) },
+			context.DeadlineExceeded, 2 * time.Second},
+		{"without a deadline", func(*testing.T) context.Context { return context.Background() },
+			nil, 4 * time.Second}, // the GOODBYE gives up after the 2s response timeout
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newTestRouter(t, true)
+			proxy := newDropProxy(t, tr.url)
+			c, _ := startTestConn(t, tr, func(cfg *Config, _ *Connection) { cfg.URL = proxy.url })
+			t.Cleanup(func() { // before the connection's cleanup Stop
+				proxy.frozen.Store(false)
+				proxy.dropAll()
+			})
+			jamWriter(t, c, proxy)
+
+			stopped := make(chan error, 1)
+			begin := time.Now()
+			go func() { stopped <- c.Stop(tt.ctx(t)) }()
+			select {
+			case err := <-stopped:
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Stop = %v, want %v", err, tt.wantErr)
+				}
+				if el := time.Since(begin); el > tt.within {
+					t.Fatalf("Stop took %v", el)
+				}
+			case <-time.After(tt.within + 3*time.Second):
+				t.Fatal("Stop waits for the stuck writer")
+			}
+			eventually(t, 5*time.Second, "the supervisor to exit", func() bool { return closed(c.done) })
+		})
+	}
+}
+
+// jamWriter freezes the link through proxy and publishes until c's
+// WebSocket writer is stuck on a full socket buffer.
+func jamWriter(t *testing.T, c *Connection, proxy *dropProxy) {
+	t.Helper()
+	proxy.frozen.Store(true)
+	payload := make([]byte, 1<<20)
+	published := make(chan struct{}, 1)
+	go func() {
+		for c.Publish(context.Background(), "stuck.topic", []any{payload}, nil, nil, 0) == nil {
+			select {
+			case published <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	// The socket buffers are full once no publish has completed for a while.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		select {
+		case <-published:
+			if time.Now().After(deadline) {
+				t.Fatal("the WebSocket writer never got stuck")
+			}
+		case <-time.After(300 * time.Millisecond):
+			return
+		}
 	}
 }
 

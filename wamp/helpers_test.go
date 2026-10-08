@@ -79,11 +79,44 @@ func (a *recordingAuth) attempts() []string {
 	return append([]string(nil), a.authIDs...)
 }
 
-// testAuthorizer denies selected operations and records REGISTER options.
+// testAuthorizer denies selected operations, records REGISTER options and the
+// messages it sees, and holds selected messages until the test releases them.
+// The router authorizes a session's messages one after another, so a held
+// message holds every later message of its session, but not what the router
+// sends to the session.
 type testAuthorizer struct {
 	mu           sync.Mutex
-	deny         map[string]bool // "publish:<topic>", "subscribe:<topic>", "register:<proc>"
+	deny         map[string]bool // keys as authzKey makes them
 	registerOpts map[string]nxwamp.Dict
+	holds        map[string]chan struct{} // held until closed
+	held         chan string              // the key of every message being held
+	seen         []string                 // the key of every message, in order
+}
+
+func newTestAuthorizer() *testAuthorizer {
+	return &testAuthorizer{
+		deny:         map[string]bool{},
+		registerOpts: map[string]nxwamp.Dict{},
+		holds:        map[string]chan struct{}{},
+		held:         make(chan string, 16),
+	}
+}
+
+// authzKey names a message: "publish:<topic>", "subscribe:<topic>",
+// "register:<procedure>", "call:<procedure>", or the message type
+// ("UNSUBSCRIBE", "UNREGISTER", ...).
+func authzKey(msg nxwamp.Message) string {
+	switch m := msg.(type) {
+	case *nxwamp.Publish:
+		return "publish:" + string(m.Topic)
+	case *nxwamp.Subscribe:
+		return "subscribe:" + string(m.Topic)
+	case *nxwamp.Register:
+		return "register:" + string(m.Procedure)
+	case *nxwamp.Call:
+		return "call:" + string(m.Procedure)
+	}
+	return msg.MessageType().String()
 }
 
 func (a *testAuthorizer) setDeny(key string, deny bool) {
@@ -98,23 +131,61 @@ func (a *testAuthorizer) registered(proc string) nxwamp.Dict {
 	return a.registerOpts[proc]
 }
 
-func (a *testAuthorizer) Authorize(_ *nxwamp.Session, msg nxwamp.Message) (bool, error) {
+// hold makes the router hold the messages with key until release is called,
+// at the latest at the end of the test. a.held receives the key of each.
+func (a *testAuthorizer) hold(t *testing.T, key string) (release func()) {
+	t.Helper()
+	ch := make(chan struct{})
+	a.mu.Lock()
+	a.holds[key] = ch
+	a.mu.Unlock()
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			a.mu.Lock()
+			delete(a.holds, key)
+			a.mu.Unlock()
+			close(ch)
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// count returns how many messages with key the router has seen.
+func (a *testAuthorizer) count(key string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	switch m := msg.(type) {
-	case *nxwamp.Publish:
-		return !a.deny["publish:"+string(m.Topic)], nil
-	case *nxwamp.Subscribe:
-		return !a.deny["subscribe:"+string(m.Topic)], nil
-	case *nxwamp.Register:
+	n := 0
+	for _, k := range a.seen {
+		if k == key {
+			n++
+		}
+	}
+	return n
+}
+
+func (a *testAuthorizer) Authorize(_ *nxwamp.Session, msg nxwamp.Message) (bool, error) {
+	key := authzKey(msg)
+	a.mu.Lock()
+	a.seen = append(a.seen, key)
+	if m, ok := msg.(*nxwamp.Register); ok {
 		opts := make(nxwamp.Dict, len(m.Options))
 		for k, v := range m.Options {
 			opts[k] = v
 		}
 		a.registerOpts[string(m.Procedure)] = opts
-		return !a.deny["register:"+string(m.Procedure)], nil
 	}
-	return true, nil
+	deny, hold := a.deny[key], a.holds[key]
+	a.mu.Unlock()
+	if hold != nil {
+		select {
+		case a.held <- key:
+		default:
+		}
+		<-hold
+	}
+	return !deny, nil
 }
 
 // trackingListener remembers accepted connections so a test can drop them:
@@ -158,7 +229,11 @@ type testRouter struct {
 	protocol []string // Sec-WebSocket-Protocol of every upgrade request
 	handlers sync.WaitGroup
 	closed   atomic.Bool
+	inject   atomic.Pointer[injectFunc] // see injectAfter
 }
+
+// injectFunc returns the messages to send a client right behind msg.
+type injectFunc func(msg nxwamp.Message) []nxwamp.Message
 
 // newTestRouter starts a router; withRealm controls whether testRealm exists.
 func newTestRouter(t *testing.T, withRealm bool) *testRouter {
@@ -168,7 +243,7 @@ func newTestRouter(t *testing.T, withRealm bool) *testRouter {
 		t:     t,
 		keys:  keys,
 		auth:  &recordingAuth{Authenticator: auth.NewCRAuthenticator(keys, time.Second)},
-		authz: &testAuthorizer{deny: map[string]bool{}, registerOpts: map[string]nxwamp.Dict{}},
+		authz: newTestAuthorizer(),
 	}
 	cfg := &router.Config{}
 	if withRealm {
@@ -179,7 +254,7 @@ func newTestRouter(t *testing.T, withRealm bool) *testRouter {
 		t.Fatalf("router: %v", err)
 	}
 	tr.r = r
-	wss := router.NewWebsocketServer(r)
+	wss := router.NewWebsocketServer(&hookedRouter{Router: r, tr: tr})
 	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		// ServeHTTP returns once the session is attached (or refused);
 		// httptest stops tracking the request when it is hijacked.
@@ -204,8 +279,82 @@ func (tr *testRouter) realmConfig() *router.RealmConfig {
 		URI:            testRealm,
 		Authenticators: []auth.Authenticator{tr.auth},
 		Authorizer:     tr.authz,
-		EnableMetaKill: true,
+		// A held message must not hold the broker (see testAuthorizer); the
+		// authorizer never alters session details.
+		AuthorizeUnlocked: true,
+		EnableMetaKill:    true,
 	}
+}
+
+// injectAfter makes the router send every WebSocket client that connects
+// from now on the messages f returns for a message, right behind it.
+func (tr *testRouter) injectAfter(f injectFunc) { tr.inject.Store(&f) }
+
+// hookedRouter attaches WebSocket clients through an injectingPeer while the
+// test router has an inject hook.
+type hookedRouter struct {
+	router.Router
+	tr *testRouter
+}
+
+func (h *hookedRouter) AttachClient(p nxwamp.Peer, details nxwamp.Dict) error {
+	if f := h.tr.inject.Load(); f != nil {
+		p = newInjectingPeer(p, *f)
+	}
+	return h.Router.AttachClient(p, details)
+}
+
+// injectingPeer is the router's end of a client connection that writes the
+// client extra messages right behind the ones its inject function picks, as
+// a router does when a message follows its reply at once. Like the router's
+// WebSocket peer it queues what the router sends: the router drops a
+// message rather than wait for a full queue.
+type injectingPeer struct {
+	nxwamp.Peer
+	out    chan nxwamp.Message
+	inject injectFunc
+}
+
+func newInjectingPeer(p nxwamp.Peer, inject injectFunc) *injectingPeer {
+	ip := &injectingPeer{Peer: p, out: make(chan nxwamp.Message, 256), inject: inject}
+	go ip.forward()
+	return ip
+}
+
+func (p *injectingPeer) Send() chan<- nxwamp.Message { return p.out }
+
+func (p *injectingPeer) forward() {
+	to := p.Peer.Send()
+	for {
+		select {
+		case msg := <-p.out:
+			for _, m := range append([]nxwamp.Message{msg}, p.inject(msg)...) {
+				select {
+				case to <- m:
+				case <-p.Done():
+					return
+				}
+			}
+		case <-p.Done():
+			return
+		}
+	}
+}
+
+// lookup asks the router for the subscription ID of topic (meta procedure
+// "wamp.subscription.lookup") or the registration ID of procedure
+// ("wamp.registration.lookup"); 0 means there is none.
+func (tr *testRouter) lookup(t *testing.T, meta nxwamp.URI, uri string) nxwamp.ID {
+	t.Helper()
+	res, err := tr.local(t).Call(ctxTimeout(t, 5*time.Second), string(meta), nil, nxwamp.List{uri}, nil, nil)
+	if err != nil {
+		t.Fatalf("%s(%s): %v", meta, uri, err)
+	}
+	if len(res.Arguments) == 0 {
+		return 0
+	}
+	id, _ := nxwamp.AsID(res.Arguments[0])
+	return id
 }
 
 func (tr *testRouter) addRealm() {

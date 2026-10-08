@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +70,8 @@ var (
 	ErrNotConfigured = errors.New("wamp: connection is not configured — call Configure() and Start() before performing WAMP operations")
 	// ErrNotConnected: no session became available within the wait window.
 	ErrNotConnected = errors.New("wamp: not connected to the IronFlock router")
-	// ErrStopped: the connection was stopped (Stop) or gave up for good.
+	// ErrStopped: the connection was stopped for good — by Stop, or by a
+	// fatal auth denial (FailOnAuthError).
 	ErrStopped = errors.New("wamp: connection stopped")
 )
 
@@ -141,9 +143,10 @@ type Config struct {
 
 // Connection is a self-healing WAMP session on one realm.
 //
-// Lifecycle: Configure, then Start (blocks until the first join), then any
-// number of concurrent operations, then Stop. A Connection is safe for
-// concurrent use by multiple goroutines.
+// Lifecycle: Configure, then Start (blocks until the first join; a failed
+// Start may be retried), then any number of concurrent operations, then Stop,
+// which is final. A Connection is safe for concurrent use by multiple
+// goroutines.
 //
 // Reconnects: one supervisor goroutine owns the connect/retry loop. Every
 // involuntary close — a refused join (wamp.error.no_such_realm while the data
@@ -158,41 +161,79 @@ type Config struct {
 // next reconnect.
 //
 // Contexts: every operation waits for a session within its context (and its
-// wait window). A Call is cancelled at the router when its context ends. The
-// router round trip of Publish, Subscribe, Register, Unsubscribe and
-// Unregister is not interruptible once sent; it is bounded by the router
-// response timeout (DefaultSessionWaitTimeout).
+// wait window). Subscribe, Register, Unsubscribe, UnsubscribeTopic and
+// Unregister also wait within their context for subscription changes in
+// progress: another such operation's router round trip, or the restore after
+// a reconnect. When the context ends first, a Subscribe or Register returns
+// its error having sent nothing; an Unsubscribe, UnsubscribeTopic or
+// Unregister returns it too, but has taken effect locally already and tells
+// the router in the background (see Unsubscribe). A Call is cancelled at the
+// router when its context ends. The router round trip of Publish, Subscribe,
+// Register, Unsubscribe and Unregister is not interruptible once sent; it is
+// bounded by the router response timeout (DefaultSessionWaitTimeout).
 type Connection struct {
 	cfg     Config
 	log     *slog.Logger
 	t       tunables
 	dialURL string
 
-	// mu guards the lifecycle state below. Lock order: stateMu before mu.
+	// mu guards the lifecycle state below. Lock order: state before mu.
 	mu         sync.Mutex
 	configured bool
-	started    bool
-	stopped    bool
-	runCtx     context.Context // cancelled by Stop or a fatal auth denial
+	started    bool            // a Start is running or has succeeded
+	stopped    bool            // for good: by Stop or a fatal auth denial
+	runCtx     context.Context // cancelled when stopped
 	cancelRun  context.CancelFunc
-	done       chan struct{} // closed when the supervisor exits
-	sess       *session      // current, restored session; nil while down
-	upCh       chan struct{} // closed while sess is set, replaced when it goes
-	peer       *observedPeer // WebSocket of the current attempt or session
-	fatal      *AuthError
+	// endSupervisor cancels the context of the last Start's supervisor, a
+	// child of runCtx: a failed Start ends the supervisor without stopping
+	// the connection.
+	endSupervisor context.CancelFunc
+	done          chan struct{} // closed when the last Start's supervisor exits; nil before Start
+	sess          *session      // current, restored session; nil while down
+	upCh          chan struct{} // closed while sess is set, replaced when it goes
+	peer          *observedPeer // WebSocket of the current session or join
+	fatal         *AuthError
 
 	stopFlag atomic.Bool // mirrors stopped for hot paths
 
 	// callbacks runs OnConnect, OnDisconnect and OnAuthFailure in order.
 	callbacks serialExecutor
 
-	// stateMu serializes changes of the tracked subscriptions and
+	// state serializes changes of the tracked subscriptions and
 	// registrations — including their WAMP round trips — with the restore
-	// after each join.
-	stateMu sync.Mutex
-	groups  []*subGroup
-	regs    []*Registration
+	// after each join. groups and regs change only while it is held; groups
+	// is copy-on-write, so that UnsubscribeTopic can find a topic's handlers
+	// without waiting for it.
+	state  stateLock
+	groups atomic.Pointer[[]*subGroup]
+	regs   []*Registration
 }
+
+// stateLock is a mutex whose waiters give up when their context ends: a
+// one-slot semaphore. The zero value is unlocked.
+type stateLock struct {
+	once sync.Once
+	sem  chan struct{}
+}
+
+// lock acquires l, or returns ctx's error — at once if ctx has ended
+// already, even if l is free. If ctx ends just as l comes free, lock may
+// acquire l all the same: a caller that must not go on once ctx has ended
+// checks it again.
+func (l *stateLock) lock(ctx context.Context) error {
+	l.once.Do(func() { l.sem = make(chan struct{}, 1) })
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case l.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *stateLock) unlock() { <-l.sem }
 
 // NewConnection returns an unconfigured Connection.
 func NewConnection() *Connection {
@@ -201,14 +242,15 @@ func NewConnection() *Connection {
 
 // Configure sets the connection parameters. It resolves the realm, the
 // serial number and the router URL, and fails when they cannot be resolved.
-// It must be called before Start and must not be called after.
+// It must be called before Start and must not be called after, even after a
+// failed Start.
 func (c *Connection) Configure(cfg Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stopped {
 		return c.stoppedErrLocked()
 	}
-	if c.started {
+	if c.started || c.done != nil {
 		return errors.New("wamp: Configure called after Start")
 	}
 	if c.t.now == nil {
@@ -267,8 +309,16 @@ func (c *Connection) Configure(cfg Config) error {
 // The primary connection waits until ctx is done: a realm that does not exist
 // yet (the concurrent-install race) is retried until it appears. With
 // FailOnAuthError the wait is additionally bounded by FirstConnectTimeout,
-// and a fatal auth denial returns an *AuthError immediately. When Start fails
-// the supervisor is stopped. Start on a started connection is an error.
+// and a fatal auth denial returns an *AuthError immediately.
+//
+// When Start fails, its supervisor has exited by the time it returns, so no
+// further attempt is made; an attempt still in its WebSocket handshake is
+// abandoned at once. Unless the connection was stopped for good — by Stop, or
+// by a fatal auth denial — it is then configured but not started again, and
+// Start may be called again: tracked subscriptions and registrations are
+// kept for the next join, and operations waiting for a session keep waiting
+// within their own windows. Start on a started connection is an error; on a
+// stopped one it returns ErrStopped.
 func (c *Connection) Start(ctx context.Context) error {
 	c.mu.Lock()
 	switch {
@@ -284,12 +334,15 @@ func (c *Connection) Start(ctx context.Context) error {
 		return errAlreadyStarted
 	}
 	c.started = true
-	c.done = make(chan struct{})
-	up := c.upCh
+	sctx, endSupervisor := context.WithCancel(c.runCtx)
+	c.endSupervisor = endSupervisor
+	done := make(chan struct{})
+	c.done = done
+	up, stopped := c.upCh, c.runCtx.Done()
 	c.mu.Unlock()
 
 	c.log.Info("Starting connection to IronFlock app realm", "url", c.cfg.URL)
-	go c.supervise()
+	go c.supervise(sctx, done)
 
 	var timeout <-chan time.Time
 	if c.cfg.FailOnAuthError {
@@ -297,38 +350,55 @@ func (c *Connection) Start(ctx context.Context) error {
 		defer timer.Stop()
 		timeout = timer.C
 	}
+	var err error
 	select {
 	case <-up:
 		return nil
-	case <-c.runCtx.Done():
-		c.mu.Lock()
-		fatal := c.fatal
-		err := c.stoppedErrLocked()
-		c.mu.Unlock()
-		c.abortStart()
-		if fatal != nil {
-			return fatal
-		}
-		return err
+	case <-stopped: // Stop or a fatal auth denial
 	case <-ctx.Done():
-		c.abortStart()
-		return fmt.Errorf("wamp: no session on realm %s: %w", c.cfg.Realm, ctx.Err())
+		err = fmt.Errorf("wamp: no session on realm %s: %w", c.cfg.Realm, ctx.Err())
 	case <-timeout:
-		c.abortStart()
-		return &connectTimeoutError{realm: c.cfg.Realm, timeout: c.cfg.FirstConnectTimeout}
+		err = &connectTimeoutError{realm: c.cfg.Realm, timeout: c.cfg.FirstConnectTimeout}
 	}
+	c.abortStart(done)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case c.fatal != nil:
+		return c.fatal // the cause, whichever way the wait ended
+	case err == nil:
+		return c.stoppedErrLocked()
+	}
+	return err
 }
 
-// abortStart stops the connection after a failed Start and waits, briefly,
-// for the supervisor to tear down.
-func (c *Connection) abortStart() {
-	c.stopInternal()
+// abortStart ends the supervisor of a failed Start and waits until it has
+// exited (done), closing the connection forcibly once startTeardown has
+// passed. Unless the connection was stopped for good meanwhile, it is then
+// configured but not started again: on its way out the supervisor withdrew
+// its session and peer, and left an open upCh behind. The tracked
+// subscriptions and registrations are kept.
+//
+// The supervisor must be gone before Start may run again: it reads and
+// writes the connection's session state until it exits.
+func (c *Connection) abortStart(done <-chan struct{}) {
+	c.mu.Lock()
+	c.endSupervisor()
+	c.mu.Unlock()
 	timer := time.NewTimer(c.t.startTeardown)
-	defer timer.Stop()
 	select {
-	case <-c.done:
+	case <-done:
+		timer.Stop()
 	case <-timer.C:
 		c.forceClose()
+		<-done
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stopped {
+		c.started = false
 	}
 }
 
@@ -348,8 +418,10 @@ func (c *Connection) stopInternal() <-chan struct{} {
 }
 
 // Stop ends the session (WAMP GOODBYE) and the supervisor, and waits for
-// them within ctx. It is idempotent. Tracked subscriptions and registrations
-// are kept, so a stopped connection is not restartable by design.
+// them within ctx. It is idempotent and final: a stopped connection cannot
+// be started again, and its operations fail with ErrStopped. A Start still
+// running returns ErrStopped. An attempt still connecting is abandoned at
+// once, even in the middle of its WebSocket handshake.
 //
 // When ctx ends first the WebSocket is closed without waiting for the
 // router's GOODBYE and ctx.Err() is returned; the supervisor exits shortly
@@ -485,14 +557,18 @@ func (c *Connection) sleep(ctx context.Context, d time.Duration) error {
 //
 // retryWindow rides out a platform restart for procedures the platform
 // serves on the app's realm: Call waits up to that long for a session, and
-// retries while the router answers wamp.error.no_such_procedure (after a
-// router or data-backend restart the backend re-registers its procedures a
-// few seconds after the app's session is back), sleeping RetryFirstDelay,
-// doubling up to RetryMaxDelay, as long as the next attempt still starts
-// within the window. In both cases the call never reached a callee, so a
-// retry cannot run it twice. Every other error, including a connection lost
-// mid-call, is returned as it comes. retryWindow 0 waits the default session
-// timeout and does not retry.
+// retries while the procedure is not served yet — the router answers
+// wamp.error.no_such_procedure (after a router or data-backend restart the
+// backend re-registers its procedures a few seconds after the app's session
+// is back), or the callee's WAMP client refuses the call with
+// wamp.error.invalid_argument "client has no handler for registration …"
+// because the call overtook its registration (nexus clients install the
+// handler only after REGISTERED) — sleeping RetryFirstDelay, doubling up to
+// RetryMaxDelay, as long as the next attempt still starts within the window.
+// In all these cases the call never reached a handler, so a retry cannot run
+// it twice. Every other error, including a connection lost mid-call, is
+// returned as it comes. retryWindow 0 waits the default session timeout and
+// does not retry.
 //
 // Errors from the router or callee are returned as *Error.
 func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *CallOptions, retryWindow time.Duration) (*Result, error) {
@@ -516,7 +592,7 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 		if err != nil {
 			return nil, err
 		}
-		res, err := s.cli.Call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs), nil)
+		res, err := s.call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs))
 		if err == nil {
 			return &Result{
 				Args:    normalizeList(res.Arguments),
@@ -525,17 +601,42 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 			}, nil
 		}
 		err = c.callError(procedure, err)
-		var werr *Error
-		if retryWindow <= 0 || !errors.As(err, &werr) || werr.URI != URINoSuchProcedure ||
-			time.Now().Add(delay).After(deadline) {
+		why := notServedYet(err)
+		if retryWindow <= 0 || why == "" || time.Now().Add(delay).After(deadline) {
 			return nil, err
 		}
-		c.log.Debug("Procedure not registered yet; retrying", "procedure", procedure, "retry_in", delay)
+		c.log.Debug(why+"; retrying", "procedure", procedure, "retry_in", delay)
 		if err := c.sleep(ctx, delay); err != nil {
 			return nil, err
 		}
 		delay = min(delay*2, c.t.retryMaxDelay)
 	}
+}
+
+// noHandlerYet starts the text of the wamp.error.invalid_argument a nexus
+// client answers an INVOCATION with when it has no handler for its
+// registration (yet).
+const noHandlerYet = "client has no handler for registration"
+
+// notServedYet tells whether err is the refusal of a call that reached no
+// handler because its procedure is not served yet (see Call). It returns
+// why, for the log, or "" for any other error.
+func notServedYet(err error) string {
+	var werr *Error
+	if !errors.As(err, &werr) {
+		return ""
+	}
+	switch werr.URI {
+	case URINoSuchProcedure:
+		return "Procedure not registered yet"
+	case string(nxwamp.ErrInvalidArgument):
+		if len(werr.Args) > 0 {
+			if text, ok := werr.Args[0].(string); ok && strings.HasPrefix(text, noHandlerYet) {
+				return "Procedure still being registered by its callee"
+			}
+		}
+	}
+	return ""
 }
 
 // Publish publishes an event, waiting up to waitWindow (0: the default
@@ -564,7 +665,10 @@ func (c *Connection) Publish(ctx context.Context, topic string, args []any, kwar
 // The WAMP subscription takes the options of the first subscription of its
 // topic. Subscribing a topic that is already subscribed with a different
 // match policy is an error: nexus can hold only one subscription per topic
-// string.
+// string. opts.Group applies to this handler, not to the WAMP subscription.
+//
+// When ctx ends while Subscribe waits for a session or for subscription
+// changes in progress, it returns ctx.Err() and has sent nothing.
 func (c *Connection) Subscribe(ctx context.Context, topic string, handler EventHandler, opts *SubscribeOptions) (*Subscription, error) {
 	if err := validateURI("topic", topic); err != nil {
 		return nil, err
@@ -573,8 +677,9 @@ func (c *Connection) Subscribe(ctx context.Context, topic string, handler EventH
 		return nil, errors.New("wamp: subscribe: nil handler")
 	}
 	var extra map[string]any
+	var group *DeliveryGroup
 	if opts != nil {
-		extra = opts.Extra
+		extra, group = opts.Extra, opts.Group
 	}
 	match, err := matchPolicy(optMatch(opts), extra)
 	if err != nil {
@@ -589,7 +694,7 @@ func (c *Connection) Subscribe(ctx context.Context, topic string, handler EventH
 		if err != nil {
 			return nil, err
 		}
-		sub, retry, err := c.subscribeOn(s, topic, match, options, handler)
+		sub, retry, err := c.subscribeOn(ctx, s, newSubscription(c, topic, match, handler, group), options)
 		if !retry {
 			return sub, err
 		}
@@ -603,41 +708,47 @@ func optMatch(opts *SubscribeOptions) string {
 	return opts.Match
 }
 
-// subscribeOn subscribes on s. retry reports that s was lost before the
+// subscribeOn subscribes sub on s, in a new group made with options unless
+// its topic has one already. retry reports that s was lost before the
 // subscription could be made, so the caller should try the next session.
-func (c *Connection) subscribeOn(s *session, topic, match string, options nxwamp.Dict, handler EventHandler) (sub *Subscription, retry bool, err error) {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+func (c *Connection) subscribeOn(ctx context.Context, s *session, sub *Subscription, options nxwamp.Dict) (_ *Subscription, retry bool, err error) {
+	if err := c.state.lock(ctx); err != nil {
+		return nil, false, err
+	}
+	defer c.state.unlock()
+	if err := ctx.Err(); err != nil { // ctx ended as the lock came free
+		return nil, false, err
+	}
 	if c.currentSession() != s {
 		return nil, true, nil
 	}
-	g := c.findGroup(topic)
-	if g != nil && g.match != match {
+	g := c.findGroup(sub.topic)
+	if g != nil && g.match != sub.match {
 		return nil, false, fmt.Errorf("wamp: topic '%s' is already subscribed with match policy %q; "+
-			"one connection can subscribe a topic with only one match policy", topic, matchName(g.match))
-	}
-	sub = &Subscription{conn: c, topic: topic, match: match, handler: handler}
-	if g != nil && g.sess.Load() == s {
-		sub.group = g
-		g.add(sub)
-		return sub, false, nil
+			"one connection can subscribe a topic with only one match policy", sub.topic, matchName(g.match))
 	}
 	tracked := g != nil
 	if !tracked {
-		g = &subGroup{topic: topic, match: match, options: options}
+		g = &subGroup{topic: sub.topic, match: sub.match, options: options}
 	}
-	if err := s.cli.Subscribe(topic, g.onEvent, cloneDict(g.options)); err != nil {
+	// The handle joins the group before the SUBSCRIBE: the router may send
+	// the first events right behind SUBSCRIBED.
+	sub.group = g
+	g.add(sub)
+	if tracked && g.sess.Load() == s {
+		return sub, false, nil // the WAMP subscription exists
+	}
+	if err := s.subscribe(sub.topic, g.onEvent, cloneDict(g.options)); err != nil {
+		g.remove(sub)
 		if !s.alive() && !c.stopFlag.Load() {
 			return nil, true, nil
 		}
-		return nil, false, c.requestError("subscribe to topic '"+topic+"'", subscribePrefix(topic), err)
+		return nil, false, c.requestError("subscribe to topic '"+sub.topic+"'", subscribePrefix(sub.topic), err)
 	}
 	g.sess.Store(s)
 	if !tracked {
-		c.groups = append(c.groups, g)
+		c.setGroups(append(slices.Clone(c.groupList()), g))
 	}
-	sub.group = g
-	g.add(sub)
 	return sub, false, nil
 }
 
@@ -648,8 +759,19 @@ func matchName(m string) string {
 	return m
 }
 
+// groupList returns the tracked groups. The slice must not be modified.
+func (c *Connection) groupList() []*subGroup {
+	if gs := c.groups.Load(); gs != nil {
+		return *gs
+	}
+	return nil
+}
+
+// setGroups replaces the tracked groups; c.state must be held.
+func (c *Connection) setGroups(gs []*subGroup) { c.groups.Store(&gs) }
+
 func (c *Connection) findGroup(topic string) *subGroup {
-	for _, g := range c.groups {
+	for _, g := range c.groupList() {
 		if g.topic == topic {
 			return g
 		}
@@ -657,51 +779,79 @@ func (c *Connection) findGroup(topic string) *subGroup {
 	return nil
 }
 
-func (c *Connection) removeGroup(g *subGroup) {
-	c.groups = slices.DeleteFunc(c.groups, func(x *subGroup) bool { return x == g })
-}
-
-// Unsubscribe removes a subscription. It is untracked first — it is never
-// restored again, whatever the router answers — and the WAMP subscription is
-// dropped once no handler of its topic remains. Unsubscribing an
-// already-removed subscription is a no-op.
+// Unsubscribe removes a subscription. It takes effect at once: the handler
+// is called for no further event — events still queued for it are dropped;
+// a call already under way is not waited for — and the subscription is never
+// restored again. Once no handler of its topic remains, the WAMP
+// subscription is ended at the router, after any subscription change in
+// progress; when ctx ends first, Unsubscribe returns ctx.Err() and the
+// router is told in the background. Unsubscribing an already-removed
+// subscription is a no-op.
 func (c *Connection) Unsubscribe(ctx context.Context, sub *Subscription) error {
-	if sub == nil || sub.conn != c {
+	if sub == nil || sub.conn != c || sub.group == nil || !sub.detach() {
 		return nil
 	}
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	g := sub.group
-	if g == nil || !sub.removed.CompareAndSwap(false, true) {
-		return nil
-	}
-	sub.queue.close()
-	if g.remove(sub) > 0 {
-		return nil
-	}
-	c.removeGroup(g)
-	return c.dropSubscription(g)
+	return c.untrack(ctx, "unsubscribe from topic '"+sub.topic+"'", func() error {
+		return c.untrackSubscriptions(sub.group, sub)
+	})
 }
 
-// UnsubscribeTopic removes every subscription of topic.
+// UnsubscribeTopic removes every current subscription of topic, the way
+// Unsubscribe removes one.
 func (c *Connection) UnsubscribeTopic(ctx context.Context, topic string) error {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
 	g := c.findGroup(topic)
 	if g == nil {
 		return nil
 	}
+	var subs []*Subscription
 	for _, sub := range g.list() {
-		sub.removed.Store(true)
-		sub.queue.close()
+		if sub.detach() {
+			subs = append(subs, sub)
+		}
+	}
+	if len(subs) == 0 {
+		return nil
+	}
+	return c.untrack(ctx, "unsubscribe from topic '"+topic+"'", func() error {
+		return c.untrackSubscriptions(g, subs...)
+	})
+}
+
+// untrack runs finish, which completes the removal of a subscription or
+// registration that has been detached already, holding c.state. When ctx
+// ends before c.state is free, finish runs in the background, and untrack
+// returns ctx.Err(); what, the operation, names a failure in the log then.
+func (c *Connection) untrack(ctx context.Context, what string, finish func() error) error {
+	if err := c.state.lock(ctx); err != nil {
+		go func() {
+			_ = c.state.lock(context.Background()) // never fails
+			defer c.state.unlock()
+			if err := finish(); err != nil {
+				c.log.Warn("Failed to "+what+" after the caller's context ended", "error", err)
+			}
+		}()
+		return err
+	}
+	defer c.state.unlock()
+	return finish()
+}
+
+// untrackSubscriptions removes the detached subs from g, and g itself — with
+// its WAMP subscription — once no handler is left in it. c.state must be
+// held.
+func (c *Connection) untrackSubscriptions(g *subGroup, subs ...*Subscription) error {
+	for _, sub := range subs {
 		g.remove(sub)
 	}
-	c.removeGroup(g)
+	if len(g.list()) > 0 || !slices.Contains(c.groupList(), g) {
+		return nil
+	}
+	c.setGroups(slices.DeleteFunc(slices.Clone(c.groupList()), func(x *subGroup) bool { return x == g }))
 	return c.dropSubscription(g)
 }
 
 // dropSubscription ends the WAMP subscription of an untracked group, if it
-// lives on the current session. c.stateMu must be held.
+// lives on the current session. c.state must be held.
 func (c *Connection) dropSubscription(g *subGroup) error {
 	s := g.sess.Swap(nil)
 	if s == nil || s != c.currentSession() {
@@ -721,6 +871,9 @@ func (c *Connection) dropSubscription(g *subGroup) error {
 //
 // A procedure can be registered once per connection: registering it again
 // before Unregister fails with wamp.error.procedure_already_exists.
+//
+// When ctx ends while Register waits for a session or for subscription
+// changes in progress, it returns ctx.Err() and has sent nothing.
 func (c *Connection) Register(ctx context.Context, procedure string, handler InvocationHandler, opts *RegisterOptions) (*Registration, error) {
 	if err := validateURI("procedure", procedure); err != nil {
 		return nil, err
@@ -746,7 +899,7 @@ func (c *Connection) Register(ctx context.Context, procedure string, handler Inv
 		if err != nil {
 			return nil, err
 		}
-		retry, err := c.registerOn(s, reg)
+		retry, err := c.registerOn(ctx, s, reg)
 		if !retry {
 			if err != nil {
 				return nil, err
@@ -756,19 +909,31 @@ func (c *Connection) Register(ctx context.Context, procedure string, handler Inv
 	}
 }
 
-func (c *Connection) registerOn(s *session, reg *Registration) (retry bool, err error) {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+func (c *Connection) registerOn(ctx context.Context, s *session, reg *Registration) (retry bool, err error) {
+	if err := c.state.lock(ctx); err != nil {
+		return false, err
+	}
+	defer c.state.unlock()
+	if err := ctx.Err(); err != nil { // ctx ended as the lock came free
+		return false, err
+	}
 	if c.currentSession() != s {
 		return true, nil
 	}
-	for _, r := range c.regs {
-		if r.procedure == reg.procedure {
+	if i := slices.IndexFunc(c.regs, func(r *Registration) bool { return r.procedure == reg.procedure }); i >= 0 {
+		prev := c.regs[i]
+		if !prev.removed.Load() {
 			return false, &Error{URI: URIProcedureAlreadyExists, Args: []any{
 				fmt.Sprintf("procedure '%s' is already registered on this connection", reg.procedure)}}
 		}
+		// Unregistered, but its removal is still waiting for c.state:
+		// finish it here, so that the procedure is registered afresh.
+		if err := c.untrackRegistration(prev); err != nil {
+			c.log.Warn("Failed to unregister the previous registration; registering the procedure anew",
+				"procedure", reg.procedure, "error", err)
+		}
 	}
-	if err := s.cli.Register(reg.procedure, reg.invoke, cloneDict(reg.options)); err != nil {
+	if err := s.register(reg.procedure, reg.invoke, cloneDict(reg.options)); err != nil {
 		if !s.alive() && !c.stopFlag.Load() {
 			return true, nil
 		}
@@ -779,18 +944,30 @@ func (c *Connection) registerOn(s *session, reg *Registration) (retry bool, err 
 	return false, nil
 }
 
-// Unregister removes a registration; untracked first, like Unsubscribe.
+// Unregister removes a registration, the way Unsubscribe removes a
+// subscription: at once, the handler is called no more — an invocation that
+// arrives before the router has dropped the registration is refused with
+// wamp.error.no_such_procedure, which callers with a retry window retry —
+// and the registration is never restored again. The router is told after
+// any subscription change in progress; when ctx ends first, Unregister
+// returns ctx.Err() and the router is told in the background.
 func (c *Connection) Unregister(ctx context.Context, reg *Registration) error {
-	if reg == nil || reg.conn != c {
+	if reg == nil || reg.conn != c || !reg.removed.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+	return c.untrack(ctx, "unregister procedure '"+reg.procedure+"'", func() error {
+		return c.untrackRegistration(reg)
+	})
+}
+
+// untrackRegistration removes reg, detached already, from the tracked
+// registrations, and ends its WAMP registration if it lives on the current
+// session. c.state must be held.
+func (c *Connection) untrackRegistration(reg *Registration) error {
 	if !slices.Contains(c.regs, reg) {
 		return nil
 	}
 	c.regs = slices.DeleteFunc(c.regs, func(r *Registration) bool { return r == reg })
-	reg.removed.Store(true)
 	s := reg.sess.Swap(nil)
 	if s == nil || s != c.currentSession() {
 		return nil // died with its session: nothing to undo
@@ -828,9 +1005,33 @@ type Subscription struct {
 	match   string
 	handler EventHandler
 
-	group   *subGroup      // set before the handle is returned
-	queue   serialExecutor // ordered event delivery
+	group   *subGroup       // set before the handle is returned
+	own     serialExecutor  // delivers the events, unless a DeliveryGroup does
+	queue   *serialExecutor // &own, or the DeliveryGroup's
 	removed atomic.Bool
+}
+
+func newSubscription(c *Connection, topic, match string, handler EventHandler, group *DeliveryGroup) *Subscription {
+	sub := &Subscription{conn: c, topic: topic, match: match, handler: handler}
+	sub.queue = &sub.own
+	if group != nil {
+		sub.queue = &group.queue
+	}
+	return sub
+}
+
+// detach removes the subscription locally: its handler is called for no
+// further event. It reports false if the subscription was removed already.
+func (s *Subscription) detach() bool {
+	if !s.removed.CompareAndSwap(false, true) {
+		return false
+	}
+	// Drop the events still queued. In a DeliveryGroup they are skipped
+	// when their turn comes (see Connection.runEventHandler).
+	if s.queue == &s.own {
+		s.own.close()
+	}
+	return true
 }
 
 // Topic returns the subscribed topic (or pattern).

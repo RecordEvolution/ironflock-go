@@ -47,6 +47,37 @@ func TestBackoffJitter(t *testing.T) {
 	}
 }
 
+// The cap holds for the jittered delay too: autobahn (Python SDK) and
+// autobahn-js clamp after applying the jitter, so at the cap the jitter can
+// only shorten the delay.
+func TestBackoffNeverExceedsCap(t *testing.T) {
+	tun := defaultTunables()
+	tun.rand = func() float64 { return 0.999 } // jitter almost +10%
+	b := newBackoff(&tun)
+	for i := range 20 {
+		d := b.next()
+		if d > BaseMaxRetryDelay {
+			t.Fatalf("attempt %d: delay %v exceeds BaseMaxRetryDelay %v", i, d, BaseMaxRetryDelay)
+		}
+		if i >= 2 && d != BaseMaxRetryDelay { // the base is 2s from the third attempt on
+			t.Fatalf("attempt %d: delay %v at the saturated base, want the cap %v", i, d, BaseMaxRetryDelay)
+		}
+	}
+
+	b.slowed = true // the realm has been missing for NoSuchRealmBackoffAfter
+	for i := range 40 {
+		if d := b.next(); d > NoSuchRealmMaxRetryDelay {
+			t.Fatalf("slowed attempt %d: delay %v exceeds NoSuchRealmMaxRetryDelay %v", i, d, NoSuchRealmMaxRetryDelay)
+		}
+	}
+	// Downward jitter still applies at the cap.
+	tun.rand = func() float64 { return 0 }
+	want := time.Duration(float64(NoSuchRealmMaxRetryDelay) * (1 - RetryDelayJitter))
+	if d := b.next(); d != want {
+		t.Fatalf("saturated delay with the largest downward jitter = %v, want %v", d, want)
+	}
+}
+
 // The no_such_realm streak mirrors the Python SDK's tests: the cap widens
 // to 120s once the realm has been missing for 60s (inclusive), and a join or
 // any other close reason restores the fast cap and restarts the streak.

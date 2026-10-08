@@ -1,12 +1,14 @@
 package wamp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"reflect"
@@ -244,6 +246,66 @@ func TestRealRouter(t *testing.T) {
 		}
 	})
 
+	// Callers on another connection that poll a device function while it is
+	// being registered are served as soon as it is, never refused because
+	// their INVOCATION came right behind REGISTERED.
+	t.Run("register race with polling callers", func(t *testing.T) {
+		callers, _ := realRouterConn(t, routerURL, nil)
+		if err := callers.Start(ctxTimeout(t, 15*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		outcomes := map[string]int{}
+		var firstRefusal error
+		const rounds, pollers = 50, 4
+		for i := range rounds {
+			proc := realRouterFunction(fmt.Sprintf("gosdk_race%d_%s", i, suffix))
+			var wg sync.WaitGroup
+			for range pollers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for ctx.Err() == nil {
+						_, err := callers.Call(ctx, proc, nil, nil, nil, 0)
+						key := "ok"
+						var werr *Error
+						if errors.As(err, &werr) {
+							key = werr.URI
+						} else if err != nil {
+							key = err.Error()
+						}
+						mu.Lock()
+						outcomes[key]++
+						if key == "wamp.error.invalid_argument" && firstRefusal == nil {
+							firstRefusal = err
+						}
+						mu.Unlock()
+						if key != URINoSuchProcedure {
+							return
+						}
+					}
+				}()
+			}
+			reg, err := c.Register(ctx, proc, func(context.Context, *Invocation) (any, error) { return "ok", nil }, nil)
+			if err != nil {
+				t.Fatalf("round %d: Register: %v", i, err)
+			}
+			wg.Wait()
+			if err := reg.Unregister(ctx); err != nil {
+				t.Fatalf("round %d: Unregister: %v", i, err)
+			}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("outcomes: %v", outcomes)
+		if n := outcomes["wamp.error.invalid_argument"]; n > 0 {
+			t.Fatalf("%d calls refused right after REGISTERED; first: %v", n, firstRefusal)
+		}
+		if outcomes["ok"] != rounds*pollers {
+			t.Fatalf("served %d calls, want %d", outcomes["ok"], rounds*pollers)
+		}
+	})
+
 	t.Run("wrong secret is fatal with FailOnAuthError", func(t *testing.T) {
 		var failures atomic.Int32
 		bad, _ := realRouterConn(t, routerURL, func(cfg *Config) {
@@ -278,19 +340,34 @@ func TestRealRouter(t *testing.T) {
 			t.Fatalf("Start = %v, want the first-connect timeout", err)
 		}
 		mu.Lock()
-		defer mu.Unlock()
 		if len(reasons) == 0 || reasons[0] != URINoSuchRealm {
 			t.Fatalf("refusal reasons = %v, want %s", reasons, URINoSuchRealm)
+		}
+		mu.Unlock()
+		// Not fatal: the connection can be started again (and waits again).
+		if err := missing.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrNotConnected) {
+			t.Fatalf("WaitSession after the failed Start = %v, want ErrNotConnected", err)
+		}
+		err = missing.Start(context.Background())
+		if !errors.Is(err, ErrNotConnected) || errors.Is(err, ErrStopped) {
+			t.Fatalf("second Start = %v, want the first-connect timeout again", err)
 		}
 	})
 }
 
 // dropProxy forwards TCP connections to a router and drops all of them on
-// request: a transport loss the router did not cause.
+// request: a transport loss the router did not cause. In stall mode it
+// accepts new connections but never answers them, like a load balancer
+// whose upstream is gone. Frozen, it stops moving bytes on the connections
+// it forwards, like a dead link that does not reset them.
 type dropProxy struct {
 	ln     net.Listener
 	target string
 	url    string // the router URL with the proxy as its host
+
+	stall   atomic.Bool   // accept new connections, read their request, never answer
+	stalled chan struct{} // receives a value for each request a stalled connection sent
+	frozen  atomic.Bool   // stop reading the forwarded connections
 
 	mu     sync.Mutex
 	conns  []net.Conn
@@ -311,7 +388,7 @@ func newDropProxy(t *testing.T, routerURL string) *dropProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &dropProxy{ln: ln, target: u.Host}
+	p := &dropProxy{ln: ln, target: u.Host, stalled: make(chan struct{}, 16)}
 	u.Host = ln.Addr().String()
 	p.url = u.String()
 	p.wg.Add(1)
@@ -327,31 +404,86 @@ func (p *dropProxy) serve() {
 		if err != nil {
 			return
 		}
+		if p.stall.Load() {
+			if !p.track(1, down) {
+				return
+			}
+			go p.hold(down)
+			continue
+		}
 		up, err := net.DialTimeout("tcp", p.target, 5*time.Second)
 		if err != nil {
 			_ = down.Close()
 			continue
 		}
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			_ = down.Close()
-			_ = up.Close()
+		if !p.track(2, down, up) {
 			return
 		}
-		p.conns = append(p.conns, down, up)
-		p.wg.Add(2)
-		p.mu.Unlock()
 		go p.pipe(up, down)
 		go p.pipe(down, up)
 	}
 }
 
+// track registers conns and their n goroutines, or closes conns if the
+// proxy is closed.
+func (p *dropProxy) track(n int, conns ...net.Conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		return false
+	}
+	p.conns = append(p.conns, conns...)
+	p.wg.Add(n)
+	return true
+}
+
+// hold reads the HTTP request of a stalled connection, reports it, and then
+// only drains the connection until it is closed.
+func (p *dropProxy) hold(conn net.Conn) {
+	defer p.wg.Done()
+	br := bufio.NewReader(conn)
+	if _, err := http.ReadRequest(br); err == nil {
+		select {
+		case p.stalled <- struct{}{}:
+		default:
+		}
+	}
+	_, _ = io.Copy(io.Discard, br)
+}
+
 func (p *dropProxy) pipe(dst, src net.Conn) {
 	defer p.wg.Done()
-	_, _ = io.Copy(dst, src)
-	_ = dst.Close()
-	_ = src.Close()
+	defer func() {
+		_ = dst.Close()
+		_ = src.Close()
+	}()
+	buf := make([]byte, 32<<10)
+	for {
+		for p.frozen.Load() {
+			if p.isClosed() {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (p *dropProxy) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 // dropAll closes every proxied connection, both sides.

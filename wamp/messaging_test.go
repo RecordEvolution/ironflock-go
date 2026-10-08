@@ -795,10 +795,7 @@ func TestRouterRefusalsAreErrors(t *testing.T) {
 		t.Fatalf("fire-and-forget Publish = %v", err)
 	}
 	// Refused entries are not tracked.
-	c.stateMu.Lock()
-	groups, regs := len(c.groups), len(c.regs)
-	c.stateMu.Unlock()
-	if groups != 0 || regs != 0 {
+	if groups, regs := trackedCounts(t, c); groups != 0 || regs != 0 {
 		t.Fatalf("refused entries tracked: %d groups, %d regs", groups, regs)
 	}
 	// Invalid arguments never reach the router.
@@ -834,15 +831,27 @@ func TestNoGoroutineLeaks(t *testing.T) {
 		if _, err := c.Subscribe(ctx, "leak.topic", handler, nil); err != nil {
 			t.Fatal(err)
 		}
+		grouped, err := c.Subscribe(ctx, "leak.grouped", handler, &SubscribeOptions{Group: NewDeliveryGroup()})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := c.Register(ctx, "leak.proc", echoHandler(""), nil); err != nil {
 			t.Fatal(err)
 		}
 		f := false
 		for range 5 {
-			if err := c.Publish(ctx, "leak.topic", []any{1}, nil, &PublishOptions{Acknowledge: true, ExcludeMe: &f}, 0); err != nil {
-				t.Fatal(err)
+			for _, topic := range []string{"leak.topic", "leak.grouped"} {
+				if err := c.Publish(ctx, topic, []any{1}, nil, &PublishOptions{Acknowledge: true, ExcludeMe: &f}, 0); err != nil {
+					t.Fatal(err)
+				}
+				recv(t, events, "event")
 			}
-			recv(t, events, "event")
+		}
+		// A removal whose context has ended completes in the background.
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := grouped.Unsubscribe(cancelled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Unsubscribe with a cancelled context = %v", err)
 		}
 		if _, err := c.Call(ctx, "leak.proc", []any{"x"}, nil, nil, 0); err != nil {
 			t.Fatal(err)
@@ -983,12 +992,12 @@ func TestConcurrentOperationsAcrossReconnects(t *testing.T) {
 		t.Fatalf("only %d iterations completed", ops.Load())
 	}
 
-	c.stateMu.Lock()
-	groups, regs := len(c.groups), len(c.regs)
-	c.stateMu.Unlock()
-	if groups != 0 || regs != 0 {
-		t.Fatalf("tracked after every caller unsubscribed: %d groups, %d registrations", groups, regs)
-	}
+	// A removal whose context ended while it waited for a restore finishes
+	// in the background.
+	eventually(t, 5*time.Second, "nothing tracked after every caller unsubscribed", func() bool {
+		groups, regs := trackedCounts(t, c)
+		return groups == 0 && regs == 0
+	})
 	eventually(t, 5*time.Second, "reconnect", c.IsOpen)
 	sess := c.currentSession()
 	for w := range 6 {

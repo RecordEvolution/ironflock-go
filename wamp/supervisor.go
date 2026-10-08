@@ -30,13 +30,18 @@ type tunables struct {
 
 	// connectTimeout bounds the TCP/TLS/WebSocket handshake of an attempt;
 	// responseTimeout bounds each step of the WAMP join, every router
-	// answer to SUBSCRIBE, REGISTER and acknowledged PUBLISH, and the
-	// GOODBYE exchange of Stop.
+	// answer to SUBSCRIBE, REGISTER and acknowledged PUBLISH, the GOODBYE
+	// exchange of Stop, and how long the client may leave a received
+	// message untaken (see observedPeer.deliver).
 	connectTimeout  time.Duration
 	responseTimeout time.Duration
 	// startTeardown bounds how long a failed Start waits for the supervisor
 	// to exit before closing the connection forcibly.
 	startTeardown time.Duration
+	// clientGrace is how long a session's nexus client gets to end once its
+	// connection is gone (or its GOODBYE exchange is over) before the
+	// session is given up and the client abandoned.
+	clientGrace time.Duration
 
 	now  func() time.Time
 	rand func() float64 // in [0, 1)
@@ -58,15 +63,18 @@ func defaultTunables() tunables {
 		connectTimeout:           15 * time.Second,
 		responseTimeout:          DefaultSessionWaitTimeout,
 		startTeardown:            5 * time.Second,
+		clientGrace:              2 * time.Second,
 		now:                      time.Now,
 		rand:                     rand.Float64,
 	}
 }
 
 // backoff is the reconnect delay policy: exponential growth from the initial
-// delay, capped at baseMaxRetryDelay — or at noSuchRealmMaxRetryDelay once
-// the realm has been missing for noSuchRealmBackoffAfter. Only the
-// supervisor goroutine uses it.
+// delay with random jitter, capped at baseMaxRetryDelay — or at
+// noSuchRealmMaxRetryDelay once the realm has been missing for
+// noSuchRealmBackoffAfter. The cap applies after the jitter, as in autobahn
+// (Python SDK) and autobahn-js: at the cap the jitter only shortens the
+// delay. Only the supervisor goroutine uses it.
 type backoff struct {
 	t *tunables
 
@@ -120,29 +128,32 @@ func (b *backoff) maxDelay() time.Duration {
 	return b.t.baseMaxRetryDelay
 }
 
-// next returns the delay before the next attempt and grows the base.
+// next returns the delay before the next attempt and grows the base. The
+// base itself carries no jitter.
 func (b *backoff) next() time.Duration {
 	ceiling := b.maxDelay()
 	d := min(b.delay, ceiling)
 	b.delay = min(time.Duration(float64(d)*b.t.retryDelayGrowth), ceiling)
 	if j := b.t.retryDelayJitter; j > 0 {
-		d = time.Duration(float64(d) * (1 + j*(2*b.t.rand()-1)))
+		d = min(time.Duration(float64(d)*(1+j*(2*b.t.rand()-1))), ceiling)
 	}
 	return d
 }
 
 // supervise is the connection's only connect/retry loop. It runs from Start
-// until the connection is stopped or fails for good, and closes c.done.
-func (c *Connection) supervise() {
-	defer close(c.done)
+// until ctx is done — the connection was stopped, or Start failed — or the
+// connection fails for good, and then closes done. Everything it does is
+// bounded once ctx is done (see Connection.forceClose for the slowest case).
+func (c *Connection) supervise(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
 	bo := newBackoff(&c.t)
-	for c.runCtx.Err() == nil {
-		s, reason, err := c.dialAndJoin()
+	for ctx.Err() == nil {
+		s, reason, err := c.dialAndJoin(ctx)
 		if err == nil {
 			bo.joined()
-			reason = c.runSession(s)
+			reason = c.runSession(ctx, s)
 		}
-		if c.runCtx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
 		if c.cfg.FailOnAuthError && IsFatalAuthReason(reason) {
@@ -166,45 +177,71 @@ func (c *Connection) supervise() {
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
-		case <-c.runCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
 			return
 		}
 	}
 }
 
-// dialAndJoin makes one connection attempt. On failure it returns the
-// router's close reason, if it sent one.
-func (c *Connection) dialAndJoin() (*session, string, error) {
+// dialAndJoin makes one connection attempt, abandoned as soon as ctx (the
+// supervisor's) is done. On failure it returns the router's close reason,
+// if it sent one.
+func (c *Connection) dialAndJoin(ctx context.Context) (*session, string, error) {
 	authID, secret := c.credentials()
 
-	ctx, cancel := context.WithTimeout(c.runCtx, c.t.connectTimeout)
+	attempt, cancel := context.WithTimeout(ctx, c.t.connectTimeout)
 	defer cancel()
 	logger := nexusLogger{c.log}
 	dead := newSignal()
+	// Once TCP is connected, gorilla/websocket honours only the attempt's
+	// deadline, not its cancellation: writing the upgrade request and reading
+	// the response (also of an HTTP proxy's CONNECT) end only at the connect
+	// timeout. So the socket is closed as soon as ctx is done, until the
+	// upgrade is over. The hook is registered on ctx, not on attempt, whose
+	// cancel above also runs after a successful attempt. Dial runs on this
+	// goroutine, inside ConnectWebsocketPeer.
+	var unhook []func() bool
+	var conn *watchedConn // the last one dialed carries the WebSocket
 	wsCfg := transport.WebsocketConfig{
 		KeepAlive: c.keepAlive(),
 		Dial: func(network, addr string) (net.Conn, error) {
 			var d net.Dialer
-			conn, err := d.DialContext(ctx, network, addr)
+			nc, err := d.DialContext(attempt, network, addr)
 			if err != nil {
 				return nil, err
 			}
-			return &watchedConn{Conn: conn, dead: dead}, nil
+			wc := &watchedConn{Conn: nc, dead: dead}
+			unhook = append(unhook, context.AfterFunc(ctx, func() { _ = wc.Close() }))
+			conn = wc
+			return wc, nil
 		},
 	}
-	inner, err := transport.ConnectWebsocketPeer(ctx, c.dialURL, serialize.MSGPACK, c.cfg.TLSConfig, logger, &wsCfg)
+	inner, err := transport.ConnectWebsocketPeer(attempt, c.dialURL, serialize.MSGPACK, c.cfg.TLSConfig, logger, &wsCfg)
+	for _, stop := range unhook {
+		stop()
+	}
 	if err != nil {
-		if c.runCtx.Err() != nil {
-			return nil, "", c.stoppedErr()
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
 		}
 		return nil, "", fmt.Errorf("connect to %s: %w", c.cfg.URL, err)
 	}
+	if ctx.Err() != nil {
+		inner.Close() // ctx ended as the upgrade finished; the hook may have closed the socket
+		return nil, "", ctx.Err()
+	}
 
-	p := newObservedPeer(inner, dead, c.registrationEvicted)
+	p := newObservedPeer(inner, dead, peerOptions{
+		conn:       conn,
+		onEvicted:  c.registrationEvicted,
+		stallAfter: c.t.responseTimeout,
+		onStall:    c.clientStalled,
+		holdLimit:  c.t.responseTimeout,
+	})
 	c.setPeer(p)
 	// Stop must not wait for a join that is still waiting for the router.
-	stopJoin := context.AfterFunc(c.runCtx, p.Close)
+	stopJoin := context.AfterFunc(ctx, p.closeNow)
 	cli, err := client.NewClient(p, client.Config{
 		Realm:        c.cfg.Realm,
 		HelloDetails: nxwamp.Dict{"authid": authID},
@@ -220,10 +257,10 @@ func (c *Connection) dialAndJoin() (*session, string, error) {
 	})
 	interrupted := !stopJoin()
 	if err != nil {
-		p.Close() // NewClient closed it already on most paths; Close is idempotent
+		p.closeNow() // NewClient closed it already on most paths; closing is idempotent
 		c.setPeer(nil)
-		if c.runCtx.Err() != nil {
-			return nil, "", c.stoppedErr()
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
 		}
 		reason, msg := p.abortReason()
 		if reason != "" {
@@ -237,20 +274,20 @@ func (c *Connection) dialAndJoin() (*session, string, error) {
 	s := newSession(cli, p)
 	if interrupted {
 		c.teardown(s, true)
-		return nil, "", c.stoppedErr()
+		return nil, "", ctx.Err()
 	}
 	c.log.Debug("Joined realm", "authid", authID, "session", cli.ID())
 	return s, "", nil
 }
 
 // runSession restores the tracked subscriptions and registrations on a
-// freshly joined session, announces it, and blocks until it ends or the
-// connection stops. It returns the close reason ("" when stopped).
-func (c *Connection) runSession(s *session) string {
-	if !c.establish(s) {
+// freshly joined session, announces it, and blocks until it ends or ctx is
+// done. It returns the close reason ("" when ctx is done).
+func (c *Connection) runSession(ctx context.Context, s *session) string {
+	if !c.establish(ctx, s) {
 		c.markDown(s)
 		c.teardown(s, s.alive())
-		if c.runCtx.Err() != nil {
+		if ctx.Err() != nil {
 			return ""
 		}
 		reason := s.closeReason()
@@ -262,40 +299,73 @@ func (c *Connection) runSession(s *session) string {
 		c.runCallback("OnConnect", cb)
 	}
 
-	select {
-	case <-s.cli.Done():
-		reason := s.closeReason()
-		c.markDown(s)
-		if c.runCtx.Err() != nil {
-			c.teardown(s, false)
-			return ""
-		}
-		c.log.Warn("Connection to IronFlock app realm closed", "reason", reason)
-		if cb := c.cfg.OnDisconnect; cb != nil {
-			c.runCallback("OnDisconnect", func() { cb(reason) })
-		}
-		c.teardown(s, false)
-		return reason
-	case <-c.runCtx.Done():
+	if !c.awaitEnd(ctx, s) {
 		c.markDown(s)
 		c.teardown(s, true)
 		c.log.Info("Connection to IronFlock app realm closed by client")
 		return ""
 	}
+	reason := s.closeReason()
+	c.markDown(s)
+	if ctx.Err() != nil {
+		c.teardown(s, false)
+		return ""
+	}
+	c.log.Warn("Connection to IronFlock app realm closed", "reason", reason)
+	if cb := c.cfg.OnDisconnect; cb != nil {
+		c.runCallback("OnDisconnect", func() { cb(reason) })
+	}
+	c.teardown(s, false)
+	return reason
+}
+
+// awaitEnd blocks until the session s has ended (true) or ctx is done
+// (false).
+//
+// A session ends with its client's receive loop, which exits moments after
+// the connection is gone, once it has processed what was received before.
+// But a nexus client's loop can wedge for good: a reply handed over just as
+// its waiter timed out parks it, and nothing wakes it (a nexus bug). Its
+// session would then never end, and nothing would reconnect. So a session
+// whose connection has been gone for clientGrace while its client still runs
+// has ended too; teardown abandons such a client. (A wedged client on a
+// connection that stays up is caught by the forwarder: see
+// observedPeer.deliver.)
+func (c *Connection) awaitEnd(ctx context.Context, s *session) bool {
+	select {
+	case <-s.cli.Done():
+		return true
+	case <-ctx.Done():
+		return false
+	case <-s.peer.Done():
+	}
+	timer := time.NewTimer(c.t.clientGrace)
+	defer timer.Stop()
+	select {
+	case <-s.cli.Done():
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		c.log.Debug("The WAMP client has not ended with its connection", "grace", c.t.clientGrace)
+	}
+	return true
 }
 
 // establish restores every tracked subscription and registration onto s
-// and then publishes s as the current session. Holding stateMu throughout
-// keeps restores and subscription changes from interleaving, and no
-// operation sees the session before its restore is complete.
-func (c *Connection) establish(s *session) bool {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	c.restore(s)
+// and then publishes s as the current session, unless ctx is done. Holding
+// c.state throughout keeps restores and subscription changes from
+// interleaving, and no operation sees the session before its restore is
+// complete.
+func (c *Connection) establish(ctx context.Context, s *session) bool {
+	if err := c.state.lock(ctx); err != nil {
+		return false
+	}
+	defer c.state.unlock()
+	c.restore(ctx, s)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.stopped || !s.alive() {
+	if ctx.Err() != nil || !s.alive() {
 		return false
 	}
 	c.sess = s
@@ -305,16 +375,22 @@ func (c *Connection) establish(s *session) bool {
 
 // restore re-subscribes and re-registers every tracked entry on s. An entry
 // that fails stays tracked, inactive, and is retried after the next join.
-// c.stateMu must be held.
-func (c *Connection) restore(s *session) {
-	if n := len(c.groups); n > 0 {
+// Entries removed while their removal waits for c.state are skipped.
+// c.state must be held.
+func (c *Connection) restore(ctx context.Context, s *session) {
+	groups := c.groupList()
+	if n := len(groups); n > 0 {
 		c.log.Info("Resubscribing", "subscriptions", n)
 	}
-	for _, g := range c.groups {
-		if !s.alive() || c.runCtx.Err() != nil {
+	for _, g := range groups {
+		if !s.alive() || ctx.Err() != nil {
 			return
 		}
-		err := s.cli.Subscribe(g.topic, g.onEvent, cloneDict(g.options))
+		if !g.wanted() {
+			g.sess.Store(nil)
+			continue
+		}
+		err := s.subscribe(g.topic, g.onEvent, cloneDict(g.options))
 		if err != nil {
 			g.sess.Store(nil)
 			c.log.Warn("Failed to restore subscription; retrying after the next reconnect", "topic", g.topic,
@@ -327,10 +403,14 @@ func (c *Connection) restore(s *session) {
 		c.log.Info("Re-registering", "procedures", n)
 	}
 	for _, r := range c.regs {
-		if !s.alive() || c.runCtx.Err() != nil {
+		if !s.alive() || ctx.Err() != nil {
 			return
 		}
-		err := s.cli.Register(r.procedure, r.invoke, cloneDict(r.options))
+		if r.removed.Load() {
+			r.sess.Store(nil)
+			continue
+		}
+		err := s.register(r.procedure, r.invoke, cloneDict(r.options))
 		if err != nil {
 			r.sess.Store(nil)
 			c.log.Warn("Failed to restore registration; retrying after the next reconnect", "procedure", r.procedure,
@@ -352,17 +432,27 @@ func (c *Connection) markDown(s *session) {
 	s.markDown()
 }
 
-// teardown ends the session and closes its client and WebSocket. With
-// graceful set it first says GOODBYE (see leave).
+// teardown ends the session and closes its client and WebSocket, within
+// bounds: with graceful set it first says GOODBYE (see leave). Calls still
+// waiting on the session are ended.
 func (c *Connection) teardown(s *session, graceful bool) {
 	if !graceful || !c.leave(s) {
-		s.peer.Close()
+		s.peer.closeNow() // lost, or no GOODBYE: nothing more to say
 	}
 	// The receive loop ends once the WebSocket is closed or the router
 	// answered the GOODBYE; Close then neither sends another GOODBYE nor
 	// waits for an answer, it only waits for running invocation goroutines.
-	<-s.cli.Done()
-	_ = s.cli.Close()
+	// A wedged loop (see awaitEnd) never ends, and Close would wait for it
+	// forever: such a client is abandoned. Its connection is closed already.
+	timer := time.NewTimer(c.t.clientGrace)
+	select {
+	case <-s.cli.Done():
+		timer.Stop()
+		_ = s.cli.Close()
+	case <-timer.C:
+		c.log.Warn("The WAMP client did not shut down; abandoning it", "session", s.cli.ID())
+	}
+	s.endOver()
 	c.setPeer(nil)
 }
 
@@ -370,7 +460,8 @@ func (c *Connection) teardown(s *session, graceful bool) {
 // response timeout. It reports whether the session ended. nexus' own Close
 // does the same but keeps waiting to hand the GOODBYE to a writer that has
 // already died with its connection (Stop racing a dropped socket), for twice
-// the response timeout.
+// the response timeout. No answer can come once the connection is gone
+// (forceClose closed it, for one).
 func (c *Connection) leave(s *session) bool {
 	timer := time.NewTimer(c.t.responseTimeout)
 	defer timer.Stop()
@@ -386,20 +477,28 @@ func (c *Connection) leave(s *session) bool {
 	select {
 	case <-s.cli.Done():
 		return true
+	case <-s.peer.Done():
+		return false
 	case <-timer.C:
 		c.log.Debug("No GOODBYE from the router; closing the connection")
 		return false
 	}
 }
 
+// clientStalled reports a session whose client has stopped taking messages
+// (see observedPeer.deliver).
+func (c *Connection) clientStalled(after time.Duration) {
+	c.log.Warn("The WAMP client stopped taking messages; closing the connection", "stalled_for", after)
+}
+
 // registrationEvicted logs a registration the router revoked because
 // another session took its procedure over (force_reregister). The entry stays
 // tracked, inactive, and is registered again after the next reconnect — the
 // Python SDK's behaviour. It runs on the receive path, so the lookup of the
-// procedure, which needs stateMu, happens on a goroutine of its own.
+// procedure, which needs c.state, happens on a goroutine of its own.
 func (c *Connection) registrationEvicted(id nxwamp.ID) {
 	go func() {
-		c.stateMu.Lock()
+		_ = c.state.lock(context.Background()) // never fails
 		s := c.currentSession()
 		procedure := ""
 		for _, r := range c.regs {
@@ -409,7 +508,7 @@ func (c *Connection) registrationEvicted(id nxwamp.ID) {
 				}
 			}
 		}
-		c.stateMu.Unlock()
+		c.state.unlock()
 		c.log.Warn("Registration taken over by another session (force_reregister); "+
 			"it is registered again after the next reconnect", "procedure", procedure, "registration", id)
 	}()
@@ -455,14 +554,19 @@ func (c *Connection) setPeer(p *observedPeer) {
 	c.mu.Unlock()
 }
 
-// forceClose closes the WebSocket of the current attempt or session
-// without waiting for the router (Stop past its deadline).
+// forceClose closes the connection of the current session (or of a join in
+// progress) without waiting for the router or the network: Stop past its
+// deadline, or a failed Start whose supervisor is slow to exit. It is
+// called once the supervisor's context is done, which already closed the
+// socket of an attempt still in its WebSocket handshake (see dialAndJoin).
+// After it, the supervisor exits within at most a response timeout (a
+// restore request on a wedged client) plus clientGrace.
 func (c *Connection) forceClose() {
 	c.mu.Lock()
 	p := c.peer
 	c.mu.Unlock()
 	if p != nil {
-		p.Close()
+		p.closeNow()
 	}
 }
 

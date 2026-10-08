@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
@@ -43,7 +44,7 @@ func closed(ch <-chan struct{}) bool {
 func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 	inner := newFakePeer()
 	evicted := make(chan nxwamp.ID, 2)
-	p := newObservedPeer(inner, newSignal(), func(id nxwamp.ID) { evicted <- id })
+	p := newObservedPeer(inner, newSignal(), peerOptions{onEvicted: func(id nxwamp.ID) { evicted <- id }})
 
 	msgs := []nxwamp.Message{
 		&nxwamp.Challenge{AuthMethod: "wampcra"},
@@ -51,6 +52,8 @@ func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 		&nxwamp.Unregistered{Details: nxwamp.Dict{"registration": nxwamp.ID(42), "reason": "wamp.error.unregistered"}},
 		&nxwamp.Abort{Reason: nxwamp.ErrNotAuthorized, Details: nxwamp.Dict{"message": "denied"}},
 		&nxwamp.Abort{Reason: nxwamp.ErrNoSuchRealm},
+		&nxwamp.Goodbye{Reason: nxwamp.CloseSystemShutdown},
+		&nxwamp.Goodbye{Reason: nxwamp.CloseGoodbyeAndOut},
 	}
 	go func() {
 		for _, m := range msgs {
@@ -64,6 +67,9 @@ func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 	}
 	if reason, msg := p.abortReason(); reason != URINotAuthorized || msg != "denied" {
 		t.Fatalf("abortReason = %q, %q (want the first ABORT)", reason, msg)
+	}
+	if reason := p.goodbyeReason(); reason != string(nxwamp.CloseSystemShutdown) {
+		t.Fatalf("goodbyeReason = %q (want the first GOODBYE)", reason)
 	}
 	if got := recv(t, evicted, "eviction"); got != 42 {
 		t.Fatalf("evicted %v", got)
@@ -88,17 +94,22 @@ func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 func TestObservedPeerDoneFiresWhileForwarderIsBlocked(t *testing.T) {
 	inner := newFakePeer()
 	dead := newSignal()
-	p := newObservedPeer(inner, dead, nil)
+	p := newObservedPeer(inner, dead, peerOptions{})
 	inner.recv <- &nxwamp.Event{} // nobody reads p.Recv(): the forwarder blocks
 
 	sendResult := make(chan bool, 1)
 	go func() { // a sender stuck on a writer nobody serves
-		select {
-		case p.Send() <- &nxwamp.Error{}:
-			sendResult <- true
-		case <-p.Done():
-			sendResult <- false
+		// The peer's sender takes the first message and then waits for the
+		// writer itself; the second one is stuck.
+		for range 2 {
+			select {
+			case p.Send() <- &nxwamp.Error{}:
+			case <-p.Done():
+				sendResult <- false
+				return
+			}
 		}
+		sendResult <- true
 	}()
 	noRecv(t, sendResult, "send outcome before the transport died")
 	dead.fire() // watchedConn: read or write error
@@ -119,9 +130,49 @@ func TestObservedPeerDoneFiresWhileForwarderIsBlocked(t *testing.T) {
 	}
 }
 
+// A client that leaves a received message untaken for stallAfter is wedged:
+// the peer reports it and closes itself, which ends the session. One that
+// takes its messages in time is left alone.
+func TestObservedPeerClosesWhenClientStalls(t *testing.T) {
+	t.Run("stalled", func(t *testing.T) {
+		inner := newFakePeer()
+		stalls := make(chan time.Duration, 1)
+		p := newObservedPeer(inner, newSignal(), peerOptions{
+			stallAfter: 50 * time.Millisecond,
+			onStall:    func(d time.Duration) { stalls <- d },
+		})
+		inner.recv <- &nxwamp.Event{} // nobody takes it
+		if got := recv(t, stalls, "the stall report"); got != 50*time.Millisecond {
+			t.Fatalf("stalled for %v", got)
+		}
+		eventually(t, 5*time.Second, "the peer to close", func() bool { return closed(p.Done()) && closed(inner.Done()) })
+		if _, ok := <-p.Recv(); ok {
+			t.Fatal("Recv delivered after the stall")
+		}
+	})
+	t.Run("taken in time", func(t *testing.T) {
+		inner := newFakePeer()
+		stalls := make(chan time.Duration, 1)
+		p := newObservedPeer(inner, newSignal(), peerOptions{
+			stallAfter: 200 * time.Millisecond,
+			onStall:    func(d time.Duration) { stalls <- d },
+		})
+		defer p.Close()
+		for range 3 {
+			go func() { inner.recv <- &nxwamp.Event{} }()
+			time.Sleep(20 * time.Millisecond) // a busy, not a wedged, receive loop
+			<-p.Recv()
+		}
+		noRecv(t, stalls, "a stall report")
+		if closed(p.Done()) {
+			t.Fatal("closed a peer whose client takes its messages")
+		}
+	})
+}
+
 func TestObservedPeerCloseFiresDone(t *testing.T) {
 	inner := newFakePeer()
-	p := newObservedPeer(inner, newSignal(), nil)
+	p := newObservedPeer(inner, newSignal(), peerOptions{})
 	p.Close()
 	p.Close() // idempotent
 	if !closed(p.Done()) {

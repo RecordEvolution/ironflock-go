@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/RecordEvolution/ironflock-go/internal/finite"
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
 )
 
 // Event is one event delivered to a subscription handler.
@@ -39,7 +41,9 @@ func (e *Event) Row() map[string]any {
 // goroutine — never on the connection's receive loop — so a handler may call
 // any other method of the connection (Call, Publish, Subscribe, ...). A slow
 // handler delays only later events of its own subscription; they are queued,
-// not dropped. A panicking handler is recovered and logged.
+// not dropped. Subscriptions that share a DeliveryGroup (see
+// SubscribeOptions.Group) deliver one event at a time across all of them
+// instead. A panicking handler is recovered and logged.
 type EventHandler func(ev *Event)
 
 // Invocation is one call of a registered procedure.
@@ -80,10 +84,15 @@ func (r *Result) Value() any {
 	return r.Args[0]
 }
 
-// Decode decodes Value() into dst (a pointer) via JSON, so struct fields are
-// matched by their json tags.
+// Decode decodes Value() into dst (a pointer) through encoding/json, so
+// struct fields are matched by their json tags.
+//
+// NaN and ±Inf (which the Python SDK sends as they are, e.g. for a failed
+// sensor read) decode as JSON null does: the field keeps its zero value, or
+// is nil when it is a pointer — declare it as *float64 to tell such a value
+// from 0.
 func (r *Result) Decode(dst any) error {
-	data, err := json.Marshal(r.Value())
+	data, err := json.Marshal(finite.OrNil(r.Value()))
 	if err != nil {
 		return fmt.Errorf("decode result: %w", err)
 	}
@@ -102,22 +111,18 @@ type Error struct {
 	Kwargs map[string]any
 }
 
-// Error implements error: "<uri>" followed by the JSON-encoded Args, if any.
+// Error implements error: "<uri>" followed by Args, if any, as compact JSON
+// without HTML escaping (as JavaScript's JSON.stringify writes it), e.g.
+// `app.error.invalid: ["a<b"]`. Args JSON cannot encode (NaN, say) are
+// printed as Go values.
 func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	var b strings.Builder
-	b.WriteString(e.URI)
-	if len(e.Args) > 0 {
-		if data, err := json.Marshal(e.Args); err == nil {
-			b.WriteString(": ")
-			b.Write(data)
-		} else {
-			fmt.Fprintf(&b, ": %v", e.Args)
-		}
+	if len(e.Args) == 0 {
+		return e.URI
 	}
-	return b.String()
+	return e.URI + ": " + jsontext.Compact(e.Args)
 }
 
 // Well-known WAMP error URIs.
@@ -150,6 +155,10 @@ type SubscribeOptions struct {
 	// Match is the topic matching policy: "" or "exact" (default), "prefix"
 	// or "wildcard".
 	Match string
+	// Group, if set, delivers the subscription's events through a
+	// DeliveryGroup it shares with other subscriptions: one event at a time
+	// across all of them, in the order they arrive.
+	Group *DeliveryGroup
 	// Extra holds additional WAMP SUBSCRIBE options, sent as-is.
 	Extra map[string]any
 }
