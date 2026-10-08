@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // ErrInvalidArgument is wrapped by every error about invalid parameters
@@ -63,8 +63,8 @@ func isClientError(err error) bool {
 
 // OperationError reports a failed SDK operation. Op names the operation and
 // its target (e.g. "Publish to topic 'x'"); Err is the cause — a
-// *crossbar.WampError when the router or callee refused, which errors.As
-// finds through it.
+// *wamp.Error (WampError) when the router or callee refused, which
+// errors.As finds through it.
 type OperationError struct {
 	Op  string
 	Err error
@@ -80,7 +80,7 @@ func (e *OperationError) Error() string {
 	if e.hint != "" {
 		return fmt.Sprintf("%s failed: %s", e.Op, e.hint)
 	}
-	var werr *crossbar.WampError
+	var werr *wamp.Error
 	if errors.As(e.Err, &werr) {
 		detail := ""
 		if len(werr.Args) > 0 {
@@ -101,7 +101,7 @@ func (e *OperationError) Unwrap() error { return e.Err }
 // WampURI returns the WAMP error URI behind err, or "" when err is not a
 // router or callee refusal.
 func WampURI(err error) string {
-	var werr *crossbar.WampError
+	var werr *wamp.Error
 	if errors.As(err, &werr) {
 		return werr.URI
 	}
@@ -192,16 +192,16 @@ var crossAppCodes = map[string]string{
 	"sys.appaccess.error.no_grant":               CodeNoGrant,
 	"sys.appaccess.error.provider_not_installed": CodeProviderNotInstalled,
 	"sys.appaccess.error.unknown_app":            CodeUnknownApp,
-	crossbar.ErrURINotAuthorized:                 CodeNotAuthorized,
-	crossbar.ErrURIAuthorizationFailed:           CodeNotAuthorized,
-	crossbar.ErrURIAuthenticationFail:            CodeNotAuthorized,
+	wamp.URINotAuthorized:                        CodeNotAuthorized,
+	wamp.URIAuthorizationFailed:                  CodeNotAuthorized,
+	wamp.URIAuthenticationFailed:                 CodeNotAuthorized,
 }
 
 // mapCrossAppError maps a WAMP refusal to a *CrossAppAccessError, or returns
 // nil when the URI is not a cross-app access condition. The message is the
 // URI followed by ": <json of the first error argument>", if any.
 func mapCrossAppError(err error) *CrossAppAccessError {
-	var werr *crossbar.WampError
+	var werr *wamp.Error
 	if !errors.As(err, &werr) {
 		return nil
 	}

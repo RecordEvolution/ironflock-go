@@ -20,7 +20,7 @@ import (
 	"time"
 
 	ironflock "github.com/RecordEvolution/ironflock-go"
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // startIronFlock creates and starts an IronFlock against the fake platform.
@@ -230,8 +230,8 @@ func TestConsumedAppRealtimeAndGuards(t *testing.T) {
 
 	// The provider realm grants a consumer read access only.
 	err = app.Connection().Publish(ctx, "transformed.readings", nil, map[string]any{"x": 1},
-		&crossbar.PublishOptions{Acknowledge: true}, 0)
-	if ironflock.WampURI(err) != crossbar.ErrURINotAuthorized {
+		&wamp.PublishOptions{Acknowledge: true}, 0)
+	if ironflock.WampURI(err) != wamp.URINotAuthorized {
 		t.Fatalf("publish on provider realm: %v", err)
 	}
 
@@ -422,9 +422,9 @@ func TestKeepAliveDetectsHalfOpenLink(t *testing.T) {
 	proxy := newFreezeProxy(t, host)
 
 	disconnected := make(chan string, 4)
-	conn := crossbar.NewConnection()
-	if err := conn.Configure(crossbar.Config{
-		SwarmKey: 2, AppKey: 26, Stage: crossbar.StageDevelopment,
+	conn := wamp.NewConnection()
+	if err := conn.Configure(wamp.Config{
+		SwarmKey: 2, AppKey: 26, Stage: wamp.StageDevelopment,
 		URL:          "ws://" + proxy.ln.Addr().String() + "/ws-ua-usr",
 		SerialNumber: testSerial, AuthID: testSerial, AuthSecret: testSerial,
 		KeepAlive:    time.Second,

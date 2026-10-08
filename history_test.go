@@ -6,21 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // answer makes the fake connection answer every call with v.
 func answer(c *fakeConn, v any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(v), nil }
+	c.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(v), nil }
 }
 
 // fail makes the fake connection fail every call with err.
 func fail(c *fakeConn, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, err }
+	c.callFn = func(fakeCall) (*wamp.Result, error) { return nil, err }
 }
 
 func TestGetHistoryPayloads(t *testing.T) {
@@ -79,7 +79,7 @@ func TestGetHistoryResultShapes(t *testing.T) {
 	if err != nil || rows == nil || len(rows) != 0 {
 		t.Errorf("no result: %#v, %v (want an empty, non-nil slice)", rows, err)
 	}
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return &crossbar.Result{}, nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return &wamp.Result{}, nil }
 	if rows, err := f.GetHistory(bg, "t", nil); err != nil || len(rows) != 0 {
 		t.Errorf("no args: %#v, %v", rows, err)
 	}
@@ -117,14 +117,14 @@ func TestGetHistoryValidation(t *testing.T) {
 
 func TestGetHistoryExplainsAMissingProcedure(t *testing.T) {
 	f := flock(t)
-	fail(f.own, wampErr(crossbar.ErrURINoSuchProcedure))
+	fail(f.own, wampErr(wamp.URINoSuchProcedure))
 	_, err := f.GetHistory(bg, "missing_table", nil)
 	want := "getHistory('missing_table') failed: history procedure 'history.transformed.missing_table' is not registered. " +
 		"Check that the table is declared in the app's data-template and that the app's data backend is running."
 	if err == nil || err.Error() != want {
 		t.Errorf("error %v\nwant %q", err, want)
 	}
-	if WampURI(err) != crossbar.ErrURINoSuchProcedure {
+	if WampURI(err) != wamp.URINoSuchProcedure {
 		t.Error("the WAMP error must stay reachable")
 	}
 
@@ -339,7 +339,7 @@ func TestVerifySecretValidationAndErrors(t *testing.T) {
 	if len(f.own.allCalls()) != 0 {
 		t.Error("an invalid query reached the connection")
 	}
-	fail(f.own, wampErr(crossbar.ErrURINoSuchProcedure))
+	fail(f.own, wampErr(wamp.URINoSuchProcedure))
 	_, err = f.VerifySecret(bg, "credentials", "api_key", "x", nil)
 	mustContain(t, err.Error(), "verifySecret('credentials') failed: procedure 'secret.verify.credentials' is not registered.",
 		"does not support secret columns yet")

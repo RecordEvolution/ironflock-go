@@ -1,6 +1,9 @@
 package filestore
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // DefaultNamespace is the namespace used when a call names none. Every app
 // data backend has it.
@@ -24,13 +27,17 @@ const (
 	CodeClockSkew             = "CLOCK_SKEW"          // client-side: device clock too far off for S3
 )
 
-// ErrorCodes lists the codes this release knows about.
-var ErrorCodes = []string{
+// errorCodes is the list ErrorCodes returns.
+var errorCodes = []string{
 	CodeNotAuthorized, CodeNoSuchNamespace, CodeNoSuchObject, CodeTooLarge,
 	CodeObjectTooLarge, CodeQuotaExceeded, CodeContentTypeNotAllowed,
 	CodeNotSupported, CodeInternal, CodeNotAvailable, CodePresignUnreachable,
 	CodeClockSkew,
 }
+
+// ErrorCodes returns the codes this release knows about. The slice is a
+// copy.
+func ErrorCodes() []string { return slices.Clone(errorCodes) }
 
 // Error is returned when a file operation is declined or fails.
 type Error struct {
@@ -42,7 +49,7 @@ type Error struct {
 	Reason string
 
 	// cause is the underlying failure, when there is one: the
-	// *crossbar.WampError a router rejection was mapped from, the network
+	// *wamp.Error a router rejection was mapped from, the network
 	// error behind CodePresignUnreachable, the decoding error behind a
 	// malformed payload.
 	cause error
@@ -72,7 +79,7 @@ func (e *Error) Is(target error) bool {
 }
 
 // Unwrap returns the underlying failure, if any — for example the
-// *crossbar.WampError a CodeNotAvailable or CodeNotAuthorized was mapped
+// *wamp.Error a CodeNotAvailable or CodeNotAuthorized was mapped
 // from, or the network error behind CodePresignUnreachable — so errors.As
 // can reach it. It returns nil for failures the service reported itself.
 func (e *Error) Unwrap() error { return e.cause }

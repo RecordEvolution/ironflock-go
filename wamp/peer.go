@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 	"sync"
 
 	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // observedPeer wraps the WebSocket peer of one connection attempt to record
 // the router's ABORT. nexus turns an ABORT that answers AUTHENTICATE — the
 // refused credential — into a plain error without the reason URI, and the
-// reason decides whether a failure is fatal (FatalAuthReasons) or a missing
+// reason decides whether a failure is fatal (IsFatalAuthReason) or a missing
 // realm (the slow-down streak).
 //
 // It also notes registrations the router revokes on its own — another
@@ -40,36 +40,36 @@ import (
 // receive channel closes, which Close guarantees. Send and IsLocal are the
 // wrapped peer's.
 type observedPeer struct {
-	wamp.Peer
+	nxwamp.Peer
 
-	in        chan wamp.Message
-	onEvicted func(registration wamp.ID) // called on the forwarder; must not block
+	in        chan nxwamp.Message
+	onEvicted func(registration nxwamp.ID) // called on the forwarder; must not block
 
 	dead    *signal // Done: closed, or the connection is gone
 	closing *signal // Close was called: nobody reads Recv any more
 
 	mu      sync.Mutex
-	abort   *wamp.Abort
-	evicted map[wamp.ID]struct{}
+	abort   *nxwamp.Abort
+	evicted map[nxwamp.ID]struct{}
 }
 
 // newObservedPeer wraps inner. dead is fired by the connection's
 // watchedConn; the peer also fires it on Close and when inner's receive
 // channel closes.
-func newObservedPeer(inner wamp.Peer, dead *signal, onEvicted func(wamp.ID)) *observedPeer {
-	p := &observedPeer{Peer: inner, in: make(chan wamp.Message), onEvicted: onEvicted, dead: dead, closing: newSignal()}
+func newObservedPeer(inner nxwamp.Peer, dead *signal, onEvicted func(nxwamp.ID)) *observedPeer {
+	p := &observedPeer{Peer: inner, in: make(chan nxwamp.Message), onEvicted: onEvicted, dead: dead, closing: newSignal()}
 	go p.forward()
 	return p
 }
 
-// Recv implements wamp.Peer.
-func (p *observedPeer) Recv() <-chan wamp.Message { return p.in }
+// Recv implements nxwamp.Peer.
+func (p *observedPeer) Recv() <-chan nxwamp.Message { return p.in }
 
-// Done implements wamp.Peer: it is closed by Close and when the connection
+// Done implements nxwamp.Peer: it is closed by Close and when the connection
 // is gone.
 func (p *observedPeer) Done() <-chan struct{} { return p.dead.done() }
 
-// Close implements wamp.Peer. It is idempotent.
+// Close implements nxwamp.Peer. It is idempotent.
 func (p *observedPeer) Close() {
 	p.closing.fire()
 	p.dead.fire() // before closing the WebSocket, so blocked senders give up
@@ -92,27 +92,27 @@ func (p *observedPeer) forward() {
 	}
 }
 
-func (p *observedPeer) observe(msg wamp.Message) {
+func (p *observedPeer) observe(msg nxwamp.Message) {
 	switch m := msg.(type) {
-	case *wamp.Abort:
+	case *nxwamp.Abort:
 		p.mu.Lock()
 		if p.abort == nil {
 			p.abort = m
 		}
 		p.mu.Unlock()
-	case *wamp.Unregistered:
+	case *nxwamp.Unregistered:
 		// Request 0: not the answer to an UNREGISTER of ours, but the
 		// router revoking the registration named in the details.
 		if m.Request != 0 {
 			return
 		}
-		id, ok := wamp.AsID(m.Details["registration"])
+		id, ok := nxwamp.AsID(m.Details["registration"])
 		if !ok {
 			return
 		}
 		p.mu.Lock()
 		if p.evicted == nil {
-			p.evicted = map[wamp.ID]struct{}{}
+			p.evicted = map[nxwamp.ID]struct{}{}
 		}
 		p.evicted[id] = struct{}{}
 		p.mu.Unlock()
@@ -123,7 +123,7 @@ func (p *observedPeer) observe(msg wamp.Message) {
 }
 
 // isEvicted reports whether the router revoked the registration id.
-func (p *observedPeer) isEvicted(id wamp.ID) bool {
+func (p *observedPeer) isEvicted(id nxwamp.ID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, ok := p.evicted[id]
@@ -138,7 +138,7 @@ func (p *observedPeer) abortReason() (reason, message string) {
 	if p.abort == nil {
 		return "", ""
 	}
-	message, _ = wamp.AsString(p.abort.Details[wamp.OptMessage])
+	message, _ = nxwamp.AsString(p.abort.Details[nxwamp.OptMessage])
 	return string(p.abort.Reason), message
 }
 

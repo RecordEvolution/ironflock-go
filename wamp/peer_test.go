@@ -1,30 +1,30 @@
-package crossbar
+package wamp
 
 import (
 	"net"
 	"sync"
 	"testing"
 
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // fakePeer is a controllable inner peer.
 type fakePeer struct {
-	recv      chan wamp.Message
-	send      chan wamp.Message
+	recv      chan nxwamp.Message
+	send      chan nxwamp.Message
 	done      chan struct{}
 	closeOnce sync.Once
 	recvOnce  sync.Once
 }
 
 func newFakePeer() *fakePeer {
-	return &fakePeer{recv: make(chan wamp.Message), send: make(chan wamp.Message), done: make(chan struct{})}
+	return &fakePeer{recv: make(chan nxwamp.Message), send: make(chan nxwamp.Message), done: make(chan struct{})}
 }
 
-func (f *fakePeer) Recv() <-chan wamp.Message { return f.recv }
-func (f *fakePeer) Send() chan<- wamp.Message { return f.send }
-func (f *fakePeer) Done() <-chan struct{}     { return f.done }
-func (f *fakePeer) IsLocal() bool             { return false }
+func (f *fakePeer) Recv() <-chan nxwamp.Message { return f.recv }
+func (f *fakePeer) Send() chan<- nxwamp.Message { return f.send }
+func (f *fakePeer) Done() <-chan struct{}       { return f.done }
+func (f *fakePeer) IsLocal() bool               { return false }
 func (f *fakePeer) Close() {
 	f.closeOnce.Do(func() { close(f.done) })
 	f.endRecv()
@@ -42,15 +42,15 @@ func closed(ch <-chan struct{}) bool {
 
 func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 	inner := newFakePeer()
-	evicted := make(chan wamp.ID, 2)
-	p := newObservedPeer(inner, newSignal(), func(id wamp.ID) { evicted <- id })
+	evicted := make(chan nxwamp.ID, 2)
+	p := newObservedPeer(inner, newSignal(), func(id nxwamp.ID) { evicted <- id })
 
-	msgs := []wamp.Message{
-		&wamp.Challenge{AuthMethod: "wampcra"},
-		&wamp.Unregistered{Request: 7}, // the answer to our own UNREGISTER
-		&wamp.Unregistered{Details: wamp.Dict{"registration": wamp.ID(42), "reason": "wamp.error.unregistered"}},
-		&wamp.Abort{Reason: wamp.ErrNotAuthorized, Details: wamp.Dict{"message": "denied"}},
-		&wamp.Abort{Reason: wamp.ErrNoSuchRealm},
+	msgs := []nxwamp.Message{
+		&nxwamp.Challenge{AuthMethod: "wampcra"},
+		&nxwamp.Unregistered{Request: 7}, // the answer to our own UNREGISTER
+		&nxwamp.Unregistered{Details: nxwamp.Dict{"registration": nxwamp.ID(42), "reason": "wamp.error.unregistered"}},
+		&nxwamp.Abort{Reason: nxwamp.ErrNotAuthorized, Details: nxwamp.Dict{"message": "denied"}},
+		&nxwamp.Abort{Reason: nxwamp.ErrNoSuchRealm},
 	}
 	go func() {
 		for _, m := range msgs {
@@ -62,7 +62,7 @@ func TestObservedPeerRecordsAbortAndEvictions(t *testing.T) {
 			t.Fatalf("message %d = %v, want %v", i, got, want)
 		}
 	}
-	if reason, msg := p.abortReason(); reason != ErrURINotAuthorized || msg != "denied" {
+	if reason, msg := p.abortReason(); reason != URINotAuthorized || msg != "denied" {
 		t.Fatalf("abortReason = %q, %q (want the first ABORT)", reason, msg)
 	}
 	if got := recv(t, evicted, "eviction"); got != 42 {
@@ -89,12 +89,12 @@ func TestObservedPeerDoneFiresWhileForwarderIsBlocked(t *testing.T) {
 	inner := newFakePeer()
 	dead := newSignal()
 	p := newObservedPeer(inner, dead, nil)
-	inner.recv <- &wamp.Event{} // nobody reads p.Recv(): the forwarder blocks
+	inner.recv <- &nxwamp.Event{} // nobody reads p.Recv(): the forwarder blocks
 
 	sendResult := make(chan bool, 1)
 	go func() { // a sender stuck on a writer nobody serves
 		select {
-		case p.Send() <- &wamp.Error{}:
+		case p.Send() <- &nxwamp.Error{}:
 			sendResult <- true
 		case <-p.Done():
 			sendResult <- false
@@ -107,7 +107,7 @@ func TestObservedPeerDoneFiresWhileForwarderIsBlocked(t *testing.T) {
 	}
 
 	// A dead connection still delivers what it had received.
-	if _, ok := (<-p.Recv()).(*wamp.Event); !ok {
+	if _, ok := (<-p.Recv()).(*nxwamp.Event); !ok {
 		t.Fatal("pending event dropped")
 	}
 	p.Close()

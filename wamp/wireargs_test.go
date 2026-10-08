@@ -1,21 +1,22 @@
-package crossbar
+package wamp
 
 import (
 	"testing"
 
 	"github.com/gammazero/nexus/v3/transport/serialize"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 	"github.com/ugorji/go/codec"
 )
 
 // TestWireArgsEncodesEmptyListBeforeKwargs pins the workaround for nexus
-// encoding a nil Arguments field as nil when ArgumentsKw follows: Crossbar
-// rejects that and closes the session, so the args slot must be [].
+// encoding a nil Arguments field as nil when ArgumentsKw follows: WAMP
+// requires a list there and a router may abort the session over it, so the
+// args slot must be [].
 func TestWireArgsEncodesEmptyListBeforeKwargs(t *testing.T) {
 	kwargs := map[string]any{"x": int64(1)}
-	data, err := (&serialize.MessagePackSerializer{}).Serialize(&wamp.Publish{
+	data, err := (&serialize.MessagePackSerializer{}).Serialize(&nxwamp.Publish{
 		Request:     1,
-		Options:     wamp.Dict{},
+		Options:     nxwamp.Dict{},
 		Topic:       "t",
 		Arguments:   wireArgs(nil, kwargs),
 		ArgumentsKw: kwargs,
@@ -43,7 +44,7 @@ func TestWireArgsEncodesEmptyListBeforeKwargs(t *testing.T) {
 	if res := invokeResult(&Result{Kwargs: map[string]any{"k": 1}}, nil); res.Args == nil || len(res.Args) != 0 {
 		t.Fatalf("yield args %#v", res.Args)
 	}
-	if res := invokeResult(nil, &WampError{URI: "app.error", Kwargs: map[string]any{"k": 1}}); res.Args == nil {
+	if res := invokeResult(nil, &Error{URI: "app.error", Kwargs: map[string]any{"k": 1}}); res.Args == nil {
 		t.Fatalf("error args %#v", res.Args)
 	}
 }

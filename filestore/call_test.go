@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // Failures arrive inside a successful WAMP result, so a call that ignored
@@ -66,8 +66,8 @@ func TestNonObjectResultIsInternal(t *testing.T) {
 		reply any
 		typ   string
 	}{
-		{&crossbar.Result{}, "null"},
-		{&crossbar.Result{Args: []any{nil}}, "null"},
+		{&wamp.Result{}, "null"},
+		{&wamp.Result{Args: []any{nil}}, "null"},
 		{[]any{map[string]any{"success": true}}, "array"},
 		{"ok", "string"},
 		{int64(1), "number"},
@@ -124,25 +124,25 @@ func TestWampErrorMapping(t *testing.T) {
 		wantCode   string
 		wantReason string
 	}{
-		{crossbar.ErrURINoSuchProcedure, nil, CodeNotAvailable,
+		{wamp.URINoSuchProcedure, nil, CodeNotAvailable,
 			"the file service is not available on this deployment"},
-		{crossbar.ErrURINoSuchProcedure, []any{"no callee for files.read.usage"}, CodeNotAvailable,
+		{wamp.URINoSuchProcedure, []any{"no callee for files.read.usage"}, CodeNotAvailable,
 			`the file service is not available on this deployment: "no callee for files.read.usage"`},
-		{crossbar.ErrURINotAuthorized, nil, CodeNotAuthorized, "wamp.error.not_authorized"},
-		{crossbar.ErrURINotAuthorized, []any{map[string]any{"why": "<role> & more"}}, CodeNotAuthorized,
+		{wamp.URINotAuthorized, nil, CodeNotAuthorized, "wamp.error.not_authorized"},
+		{wamp.URINotAuthorized, []any{map[string]any{"why": "<role> & more"}}, CodeNotAuthorized,
 			`wamp.error.not_authorized: {"why":"<role> & more"}`},
-		{crossbar.ErrURIAuthorizationFailed, []any{"first", "second"}, CodeNotAuthorized,
+		{wamp.URIAuthorizationFailed, []any{"first", "second"}, CodeNotAuthorized,
 			`wamp.error.authorization_failed: "first"`},
-		{crossbar.ErrURIAuthenticationFail, []any{int64(3)}, CodeNotAuthorized,
+		{wamp.URIAuthenticationFailed, []any{int64(3)}, CodeNotAuthorized,
 			"wamp.error.authentication_failed: 3"},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s/%d", tc.uri, len(tc.args)), func(t *testing.T) {
-			we := &crossbar.WampError{URI: tc.uri, Args: tc.args}
+			we := &wamp.Error{URI: tc.uri, Args: tc.args}
 			fs, _ := newStore(t, map[string]any{URIUsage: we})
 			_, err := fs.Usage(ctx)
 			wantError(t, err, tc.wantCode, tc.wantReason)
-			var got *crossbar.WampError
+			var got *wamp.Error
 			if !errors.As(err, &got) || got != we {
 				t.Errorf("the WAMP error is not reachable through the mapped error")
 			}
@@ -153,14 +153,14 @@ func TestWampErrorMapping(t *testing.T) {
 	}
 
 	t.Run("wrapped WAMP error", func(t *testing.T) {
-		we := &crossbar.WampError{URI: crossbar.ErrURINotAuthorized}
+		we := &wamp.Error{URI: wamp.URINotAuthorized}
 		fs, _ := newStore(t, map[string]any{URIPut: fmt.Errorf("call failed: %w", we)})
 		_, err := fs.Put(ctx, "a.jpg", []byte("x"), Namespace("frames"))
 		wantError(t, err, CodeNotAuthorized, "wamp.error.not_authorized")
 	})
 
 	t.Run("unmapped WAMP error passes through", func(t *testing.T) {
-		we := &crossbar.WampError{URI: crossbar.ErrURIRuntimeError, Args: []any{"boom"}}
+		we := &wamp.Error{URI: wamp.URIRuntimeError, Args: []any{"boom"}}
 		fs, _ := newStore(t, map[string]any{URIUsage: we})
 		_, err := fs.Usage(ctx)
 		if err != we {
@@ -181,7 +181,7 @@ func TestWampErrorMapping(t *testing.T) {
 	})
 
 	t.Run("file errors pass through unchanged", func(t *testing.T) {
-		orig := wrapError(CodeNotAvailable, "x", &crossbar.WampError{URI: crossbar.ErrURINoSuchProcedure})
+		orig := wrapError(CodeNotAvailable, "x", &wamp.Error{URI: wamp.URINoSuchProcedure})
 		fs, _ := newStore(t, map[string]any{URIUsage: orig})
 		if _, err := fs.Usage(ctx); err != orig {
 			t.Fatalf("err = %v, want the original *Error", err)
@@ -189,7 +189,7 @@ func TestWampErrorMapping(t *testing.T) {
 	})
 
 	t.Run("the catalog fetch is mapped too", func(t *testing.T) {
-		fs, _ := newStore(t, map[string]any{URINamespaces: &crossbar.WampError{URI: crossbar.ErrURINoSuchProcedure}})
+		fs, _ := newStore(t, map[string]any{URINamespaces: &wamp.Error{URI: wamp.URINoSuchProcedure}})
 		_, err := fs.Put(ctx, "a", []byte("x"))
 		wantError(t, err, CodeNotAvailable, "the file service is not available on this deployment")
 	})
@@ -334,5 +334,23 @@ func TestErrorType(t *testing.T) {
 	}
 	if (&Error{Code: CodeInternal}).Error() != "INTERNAL" {
 		t.Error("an error without reason must read as its code")
+	}
+}
+
+// ErrorCodes hands out a copy: a caller cannot change the list for others.
+func TestErrorCodesIsACopy(t *testing.T) {
+	want := []string{
+		CodeNotAuthorized, CodeNoSuchNamespace, CodeNoSuchObject, CodeTooLarge,
+		CodeObjectTooLarge, CodeQuotaExceeded, CodeContentTypeNotAllowed,
+		CodeNotSupported, CodeInternal, CodeNotAvailable, CodePresignUnreachable,
+		CodeClockSkew,
+	}
+	codes := ErrorCodes()
+	if !reflect.DeepEqual(codes, want) {
+		t.Fatalf("ErrorCodes() = %q, want %q", codes, want)
+	}
+	codes[0] = "CHANGED"
+	if got := ErrorCodes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the list changed through a returned slice: %q", got)
 	}
 }

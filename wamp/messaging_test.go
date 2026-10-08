@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 func eventCollector(buffer int) (EventHandler, chan *Event) {
@@ -29,7 +29,7 @@ func echoHandler(prefix string) InvocationHandler {
 }
 
 // localCall calls from a trusted local client.
-func localCall(t *testing.T, cli *client.Client, proc string, args ...any) (*wamp.Result, error) {
+func localCall(t *testing.T, cli *client.Client, proc string, args ...any) (*nxwamp.Result, error) {
 	t.Helper()
 	return cli.Call(ctxTimeout(t, 5*time.Second), proc, nil, args, nil, nil)
 }
@@ -77,7 +77,7 @@ func TestPatternSubscriptionEventTopic(t *testing.T) {
 	if sub.Match() != "prefix" {
 		t.Fatalf("Match() = %q", sub.Match())
 	}
-	localPublish(t, tr.local(t), "app.sensors.temp", wamp.List{21.5}, nil)
+	localPublish(t, tr.local(t), "app.sensors.temp", nxwamp.List{21.5}, nil)
 	ev := recv(t, events, "pattern event")
 	if ev.Topic != "app.sensors.temp" {
 		t.Fatalf("Event.Topic = %q, want the concrete topic", ev.Topic)
@@ -108,13 +108,13 @@ func TestMultipleHandlersShareOneSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wampSubID := func() (wamp.ID, bool) { return c.currentSession().cli.SubscriptionID("shared.topic") }
+	wampSubID := func() (nxwamp.ID, bool) { return c.currentSession().cli.SubscriptionID("shared.topic") }
 	id, ok := wampSubID()
 	if !ok {
 		t.Fatal("no WAMP subscription")
 	}
 
-	localPublish(t, pub, "shared.topic", wamp.List{1}, nil)
+	localPublish(t, pub, "shared.topic", nxwamp.List{1}, nil)
 	recv(t, ev1, "event for handler 1")
 	recv(t, ev2, "event for handler 2")
 
@@ -128,7 +128,7 @@ func TestMultipleHandlersShareOneSubscription(t *testing.T) {
 	if id2, ok := wampSubID(); !ok || id2 != id {
 		t.Fatal("WAMP subscription changed")
 	}
-	localPublish(t, pub, "shared.topic", wamp.List{2}, nil)
+	localPublish(t, pub, "shared.topic", nxwamp.List{2}, nil)
 	if got := recv(t, ev2, "event for handler 2").Args[0]; got != int64(2) {
 		t.Fatalf("got %v", got)
 	}
@@ -146,7 +146,7 @@ func TestMultipleHandlersShareOneSubscription(t *testing.T) {
 	if _, ok := wampSubID(); ok {
 		t.Fatal("WAMP subscription kept after the last handler left")
 	}
-	localPublish(t, pub, "shared.topic", wamp.List{3}, nil)
+	localPublish(t, pub, "shared.topic", nxwamp.List{3}, nil)
 	noRecv(t, ev2, "event after unsubscribe")
 
 	// UnsubscribeTopic removes every handler of a topic.
@@ -170,9 +170,9 @@ func TestEventHandlerCanCallWithoutDeadlock(t *testing.T) {
 	tr := newTestRouter(t, true)
 	c, _ := startTestConn(t, tr)
 	callee := tr.local(t)
-	if err := callee.Register("svc.double", func(_ context.Context, inv *wamp.Invocation) client.InvokeResult {
-		n, _ := wamp.AsInt64(inv.Arguments[0])
-		return client.InvokeResult{Args: wamp.List{2 * n}}
+	if err := callee.Register("svc.double", func(_ context.Context, inv *nxwamp.Invocation) client.InvokeResult {
+		n, _ := nxwamp.AsInt64(inv.Arguments[0])
+		return client.InvokeResult{Args: nxwamp.List{2 * n}}
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestEventHandlerCanCallWithoutDeadlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	localPublish(t, callee, "trigger", wamp.List{21}, nil)
+	localPublish(t, callee, "trigger", nxwamp.List{21}, nil)
 	if got := recv(t, results, "handler result"); got != int64(42) {
 		t.Fatalf("handler got %v", got)
 	}
@@ -226,7 +226,7 @@ func TestEventsDeliveredInOrderAndPanicsRecovered(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range n {
-		if err := pub.Publish("ordered", nil, wamp.List{i}, nil); err != nil {
+		if err := pub.Publish("ordered", nil, nxwamp.List{i}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -292,8 +292,8 @@ func TestReconnectRestoresSubscriptionsAndRegistrations(t *testing.T) {
 			}
 		}
 		other := tr.local(t)
-		localPublish(t, other, "restore.a", wamp.List{round}, nil)
-		localPublish(t, other, "restore.b.x", wamp.List{round}, nil)
+		localPublish(t, other, "restore.a", nxwamp.List{round}, nil)
+		localPublish(t, other, "restore.b.x", nxwamp.List{round}, nil)
 		if ev := recv(t, evA, "event a"); ev.Args[0] != int64(round) {
 			t.Fatalf("event a = %v", ev.Args)
 		}
@@ -377,7 +377,7 @@ func TestFailedRestoreIsRetriedNextReconnect(t *testing.T) {
 		t.Fatal("entries not restored on the next reconnect")
 	}
 	pub := tr.local(t)
-	localPublish(t, pub, "flaky.topic", wamp.List{"back"}, nil)
+	localPublish(t, pub, "flaky.topic", nxwamp.List{"back"}, nil)
 	recv(t, evF, "event after the retried restore")
 	if _, err := localCall(t, pub, "flaky.proc", "x"); err != nil {
 		t.Fatal(err)
@@ -455,9 +455,9 @@ func TestCallRetryWindow(t *testing.T) {
 	t.Run("no window fails at once", func(t *testing.T) {
 		start := time.Now()
 		_, err := c.Call(context.Background(), "late.proc", nil, nil, nil, 0)
-		var werr *WampError
-		if !errors.As(err, &werr) || werr.URI != ErrURINoSuchProcedure {
-			t.Fatalf("Call = %v, want *WampError no_such_procedure", err)
+		var werr *Error
+		if !errors.As(err, &werr) || werr.URI != URINoSuchProcedure {
+			t.Fatalf("Call = %v, want *Error no_such_procedure", err)
 		}
 		if time.Since(start) > 500*time.Millisecond {
 			t.Fatal("retried without a window")
@@ -467,8 +467,8 @@ func TestCallRetryWindow(t *testing.T) {
 	t.Run("late registration is reached", func(t *testing.T) {
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			_ = callee.Register("late.proc", func(context.Context, *wamp.Invocation) client.InvokeResult {
-				return client.InvokeResult{Args: wamp.List{"ok"}}
+			_ = callee.Register("late.proc", func(context.Context, *nxwamp.Invocation) client.InvokeResult {
+				return client.InvokeResult{Args: nxwamp.List{"ok"}}
 			}, nil)
 		}()
 		start := time.Now()
@@ -486,22 +486,22 @@ func TestCallRetryWindow(t *testing.T) {
 
 	t.Run("other errors are not retried", func(t *testing.T) {
 		var calls atomic.Int32
-		if err := callee.Register("failing.proc", func(context.Context, *wamp.Invocation) client.InvokeResult {
+		if err := callee.Register("failing.proc", func(context.Context, *nxwamp.Invocation) client.InvokeResult {
 			calls.Add(1)
 			return client.InvokeResult{Err: "app.error.bad_input",
-				Args: wamp.List{uint8(7), map[string]int{"limit": 10}}, Kwargs: wamp.Dict{"field": "x"}}
+				Args: nxwamp.List{uint8(7), map[string]int{"limit": 10}}, Kwargs: nxwamp.Dict{"field": "x"}}
 		}, nil); err != nil {
 			t.Fatal(err)
 		}
 		_, err := c.Call(context.Background(), "failing.proc", nil, nil, nil, 2*time.Second)
-		var werr *WampError
+		var werr *Error
 		if !errors.As(err, &werr) {
 			t.Fatalf("Call = %T %v", err, err)
 		}
-		want := &WampError{URI: "app.error.bad_input", Args: []any{int64(7), map[string]any{"limit": int64(10)}},
+		want := &Error{URI: "app.error.bad_input", Args: []any{int64(7), map[string]any{"limit": int64(10)}},
 			Kwargs: map[string]any{"field": "x"}}
 		if !reflect.DeepEqual(werr, want) {
-			t.Fatalf("WampError = %#v, want %#v", werr, want)
+			t.Fatalf("Error = %#v, want %#v", werr, want)
 		}
 		if n := calls.Load(); n != 1 {
 			t.Fatalf("callee invoked %d times", n)
@@ -511,8 +511,8 @@ func TestCallRetryWindow(t *testing.T) {
 	t.Run("window closes", func(t *testing.T) {
 		start := time.Now()
 		_, err := c.Call(context.Background(), "never.proc", nil, nil, nil, 100*time.Millisecond)
-		var werr *WampError
-		if !errors.As(err, &werr) || werr.URI != ErrURINoSuchProcedure {
+		var werr *Error
+		if !errors.As(err, &werr) || werr.URI != URINoSuchProcedure {
 			t.Fatalf("Call = %v", err)
 		}
 		if el := time.Since(start); el < 50*time.Millisecond || el > 2*time.Second {
@@ -535,8 +535,8 @@ func TestCallRetryWindow(t *testing.T) {
 			tr.addRealm()
 			time.Sleep(50 * time.Millisecond)
 			cli := tr.local(t)
-			_ = cli.Register("after.restart", func(context.Context, *wamp.Invocation) client.InvokeResult {
-				return client.InvokeResult{Args: wamp.List{"served"}}
+			_ = cli.Register("after.restart", func(context.Context, *nxwamp.Invocation) client.InvokeResult {
+				return client.InvokeResult{Args: nxwamp.List{"served"}}
 			}, nil)
 		}()
 		res, err := c.Call(context.Background(), "after.restart", nil, nil, nil, 5*time.Second)
@@ -582,32 +582,32 @@ func TestRegisterResultMapping(t *testing.T) {
 	tests := []struct {
 		name     string
 		handler  InvocationHandler
-		wantArgs wamp.List
-		wantKw   wamp.Dict
+		wantArgs nxwamp.List
+		wantKw   nxwamp.Dict
 		wantErr  string
-		errArgs  wamp.List
+		errArgs  nxwamp.List
 	}{
 		{name: "value", handler: func(context.Context, *Invocation) (any, error) { return 42, nil },
-			wantArgs: wamp.List{int64(42)}},
+			wantArgs: nxwamp.List{int64(42)}},
 		{name: "map value", handler: func(context.Context, *Invocation) (any, error) {
 			return map[string]any{"a": []any{1, "b"}}, nil
-		}, wantArgs: wamp.List{map[string]any{"a": []any{int64(1), "b"}}}},
+		}, wantArgs: nxwamp.List{map[string]any{"a": []any{int64(1), "b"}}}},
 		{name: "Result", handler: func(context.Context, *Invocation) (any, error) {
 			return Result{Args: []any{1, 2}, Kwargs: map[string]any{"k": "v"}}, nil
-		}, wantArgs: wamp.List{int64(1), int64(2)}, wantKw: wamp.Dict{"k": "v"}},
+		}, wantArgs: nxwamp.List{int64(1), int64(2)}, wantKw: nxwamp.Dict{"k": "v"}},
 		{name: "*Result", handler: func(context.Context, *Invocation) (any, error) {
 			return &Result{Kwargs: map[string]any{"only": true}}, nil
-		}, wantKw: wamp.Dict{"only": true}},
+		}, wantKw: nxwamp.Dict{"only": true}},
 		{name: "nil", handler: func(context.Context, *Invocation) (any, error) { return nil, nil }},
-		{name: "WampError", handler: func(context.Context, *Invocation) (any, error) {
-			return nil, &WampError{URI: "app.error.custom", Args: []any{"detail"}}
-		}, wantErr: "app.error.custom", errArgs: wamp.List{"detail"}},
+		{name: "*Error", handler: func(context.Context, *Invocation) (any, error) {
+			return nil, &Error{URI: "app.error.custom", Args: []any{"detail"}}
+		}, wantErr: "app.error.custom", errArgs: nxwamp.List{"detail"}},
 		{name: "plain error", handler: func(context.Context, *Invocation) (any, error) {
 			return nil, errors.New("boom")
-		}, wantErr: ErrURIRuntimeError, errArgs: wamp.List{"boom"}},
+		}, wantErr: URIRuntimeError, errArgs: nxwamp.List{"boom"}},
 		{name: "panic", handler: func(context.Context, *Invocation) (any, error) {
 			panic("kaboom")
-		}, wantErr: ErrURIRuntimeError},
+		}, wantErr: URIRuntimeError},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -683,15 +683,15 @@ func TestRegisterOptionsAndInvocation(t *testing.T) {
 
 	// A second registration of a procedure on the same connection.
 	_, err := c.Register(ctx, "opts.default", handler, nil)
-	var werr *WampError
-	if !errors.As(err, &werr) || werr.URI != ErrURIProcedureExists {
+	var werr *Error
+	if !errors.As(err, &werr) || werr.URI != URIProcedureAlreadyExists {
 		t.Fatalf("duplicate Register = %v", err)
 	}
 
 	// Payload normalization on the callee side.
 	caller := tr.local(t)
 	_, err = caller.Call(ctx, "opts.default", nil,
-		wamp.List{uint16(1), map[string]any{"n": []int{1, 2}}}, wamp.Dict{"f": float32(0.5)}, nil)
+		nxwamp.List{uint16(1), map[string]any{"n": []int{1, 2}}}, nxwamp.Dict{"f": float32(0.5)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,11 +724,11 @@ func TestPayloadNormalizationFromMsgpack(t *testing.T) {
 	pub := tr.local(t)
 	big := uint64(math.MaxInt64) + 10
 	localPublish(t, pub, "norm.topic",
-		wamp.List{int8(-1), uint8(200), 70000, int64(1) << 40, big, 2.5, float32(1.5), "s", true, nil, []byte("raw")},
-		wamp.Dict{
+		nxwamp.List{int8(-1), uint8(200), 70000, int64(1) << 40, big, 2.5, float32(1.5), "s", true, nil, []byte("raw")},
+		nxwamp.Dict{
 			"nested": map[string]any{
 				"list": []any{1, map[string]int{"deep": 3}, nil},
-				"dict": wamp.Dict{"x": []string{"a", "b"}},
+				"dict": nxwamp.Dict{"x": []string{"a", "b"}},
 			},
 		})
 	ev := recv(t, events, "event")
@@ -748,8 +748,8 @@ func TestPayloadNormalizationFromMsgpack(t *testing.T) {
 	}
 
 	// Call results are normalized the same way.
-	if err := pub.Register("norm.proc", func(context.Context, *wamp.Invocation) client.InvokeResult {
-		return client.InvokeResult{Args: wamp.List{uint32(5), wamp.Dict{"k": []uint{1}}}, Kwargs: wamp.Dict{"z": int16(-2)}}
+	if err := pub.Register("norm.proc", func(context.Context, *nxwamp.Invocation) client.InvokeResult {
+		return client.InvokeResult{Args: nxwamp.List{uint32(5), nxwamp.Dict{"k": []uint{1}}}, Kwargs: nxwamp.Dict{"z": int16(-2)}}
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -769,7 +769,7 @@ func TestPayloadNormalizationFromMsgpack(t *testing.T) {
 	}
 }
 
-func TestRouterRefusalsAreWampErrors(t *testing.T) {
+func TestRouterRefusalsAreErrors(t *testing.T) {
 	tr := newTestRouter(t, true)
 	c, _ := startTestConn(t, tr)
 	ctx := ctxTimeout(t, 5*time.Second)
@@ -779,9 +779,9 @@ func TestRouterRefusalsAreWampErrors(t *testing.T) {
 
 	check := func(op string, err error) {
 		t.Helper()
-		var werr *WampError
-		if !errors.As(err, &werr) || werr.URI != ErrURINotAuthorized {
-			t.Fatalf("%s = %T %v, want *WampError not_authorized", op, err, err)
+		var werr *Error
+		if !errors.As(err, &werr) || werr.URI != URINotAuthorized {
+			t.Fatalf("%s = %T %v, want *Error not_authorized", op, err, err)
 		}
 	}
 	check("acknowledged Publish", c.Publish(ctx, "denied.topic", []any{1}, nil, &PublishOptions{Acknowledge: true}, 0))

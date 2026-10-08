@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // --- fake WAMP caller --------------------------------------------------------
@@ -27,15 +27,15 @@ type fakeCall struct {
 	URI    string
 	Args   []any
 	Kwargs map[string]any
-	Opts   *crossbar.CallOptions
+	Opts   *wamp.CallOptions
 	Retry  time.Duration
 }
 
-// fakeCaller stands in for *crossbar.Connection: it records every call and
+// fakeCaller stands in for *wamp.Connection: it records every call and
 // answers with a scripted reply per URI. A reply is
 //   - an error: returned as the call error
 //   - a replyFunc: called with the args
-//   - a *crossbar.Result: returned as is
+//   - a *wamp.Result: returned as is
 //   - anything else: returned as the single positional result
 type fakeCaller struct {
 	mu      sync.Mutex
@@ -47,7 +47,7 @@ func newFakeCaller(replies map[string]any) *fakeCaller {
 	return &fakeCaller{replies: maps.Clone(replies)}
 }
 
-func (f *fakeCaller) Call(ctx context.Context, uri string, args []any, kwargs map[string]any, opts *crossbar.CallOptions, retry time.Duration) (*crossbar.Result, error) {
+func (f *fakeCaller) Call(ctx context.Context, uri string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retry time.Duration) (*wamp.Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, fakeCall{URI: uri, Args: args, Kwargs: kwargs, Opts: opts, Retry: retry})
 	reply, ok := f.replies[uri]
@@ -70,10 +70,10 @@ func (f *fakeCaller) Call(ctx context.Context, uri string, args []any, kwargs ma
 	switch r := reply.(type) {
 	case error:
 		return nil, r
-	case *crossbar.Result:
+	case *wamp.Result:
 		return r, nil
 	}
-	return &crossbar.Result{Args: []any{reply}}, nil
+	return &wamp.Result{Args: []any{reply}}, nil
 }
 
 // set replaces the reply for uri.

@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // maxTableNameLength is the longest table name the SDK accepts.
@@ -86,7 +86,7 @@ func (f *IronFlock) publish(ctx context.Context, group, topic string, args []any
 
 func (f *IronFlock) publishMessage(ctx context.Context, topic string, args []any, kwargs map[string]any, window time.Duration) error {
 	err := f.conn.Publish(ctx, topic, args, f.withDeviceMetadata(kwargs),
-		&crossbar.PublishOptions{Acknowledge: true}, window)
+		&wamp.PublishOptions{Acknowledge: true}, window)
 	return operationFailed(fmt.Sprintf("Publish to topic '%s'", topic), err)
 }
 

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // errNoCaller is returned by every call of a FileStore built without a
@@ -20,10 +20,10 @@ var errNoCaller = errors.New("filestore: no connection to call the file service 
 // than the data plane), which an app must be able to tell apart from "you
 // may not do this".
 var wampErrorCodes = map[string]string{
-	crossbar.ErrURINoSuchProcedure:     CodeNotAvailable,
-	crossbar.ErrURINotAuthorized:       CodeNotAuthorized,
-	crossbar.ErrURIAuthorizationFailed: CodeNotAuthorized,
-	crossbar.ErrURIAuthenticationFail:  CodeNotAuthorized,
+	wamp.URINoSuchProcedure:      CodeNotAvailable,
+	wamp.URINotAuthorized:        CodeNotAuthorized,
+	wamp.URIAuthorizationFailed:  CodeNotAuthorized,
+	wamp.URIAuthenticationFailed: CodeNotAuthorized,
 }
 
 // call calls a file service procedure and unwraps the response envelope
@@ -37,7 +37,7 @@ var wampErrorCodes = map[string]string{
 // Failures the service reports in the envelope are returned as *Error with
 // the code passed through verbatim (CodeInternal when absent). Router
 // rejections are mapped by mapWampError; every other error (no session,
-// cancelled context, an unmapped WAMP error as *crossbar.WampError) is
+// cancelled context, an unmapped WAMP error as *wamp.Error) is
 // returned unchanged. A successful call returns the envelope's payload, or
 // an empty map when it has none.
 func (s *FileStore) call(ctx context.Context, uri string, payload map[string]any) (map[string]any, error) {
@@ -77,7 +77,7 @@ func (s *FileStore) call(ctx context.Context, uri string, payload map[string]any
 	return map[string]any{}, nil
 }
 
-// mapWampError maps a router-level rejection (a *crossbar.WampError anywhere
+// mapWampError maps a router-level rejection (a *wamp.Error anywhere
 // in err's chain) with one of the URIs in wampErrorCodes to an *Error, or
 // returns nil when err is not such a rejection (or is already an *Error).
 // The reason carries the first error argument, JSON-encoded, as detail.
@@ -86,7 +86,7 @@ func mapWampError(err error) *Error {
 	if errors.As(err, &fe) {
 		return nil // already a file error
 	}
-	var we *crossbar.WampError
+	var we *wamp.Error
 	if !errors.As(err, &we) || we == nil {
 		return nil
 	}

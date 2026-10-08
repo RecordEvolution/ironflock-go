@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 func TestNewReadsTheInjectedEnvironment(t *testing.T) {
@@ -159,7 +159,7 @@ func TestStartConfiguresTheConnection(t *testing.T) {
 	if cfg.SwarmKey != 10 || cfg.AppKey != 20 || cfg.Stage != StageDevelopment {
 		t.Errorf("realm config = %d %d %q", cfg.SwarmKey, cfg.AppKey, cfg.Stage)
 	}
-	if cfg.URL != crossbar.StudioWSURI {
+	if cfg.URL != wamp.StudioWSURI {
 		t.Errorf("URL = %q", cfg.URL)
 	}
 	if cfg.SerialNumber != "test-serial-123" || cfg.AuthID != "" || cfg.AuthSecret != "" {
@@ -186,9 +186,9 @@ func TestStartURLPrecedence(t *testing.T) {
 		opts []Option
 		want string
 	}{
-		{"default", nil, nil, crossbar.StudioWSURI},
-		{"RESWARM_URL", map[string]string{"RESWARM_URL": "http://localhost:8086"}, nil, crossbar.LocalhostWSURI},
-		{"WithReswarmURL", nil, []Option{WithReswarmURL("https://studio.ironflock.dev")}, crossbar.StudioDevWSURI},
+		{"default", nil, nil, wamp.StudioWSURI},
+		{"RESWARM_URL", map[string]string{"RESWARM_URL": "http://localhost:8086"}, nil, wamp.LocalhostWSURI},
+		{"WithReswarmURL", nil, []Option{WithReswarmURL("https://studio.ironflock.dev")}, wamp.StudioDevWSURI},
 		{"DEVICE_ENDPOINT_URL", map[string]string{"DEVICE_ENDPOINT_URL": "ws://10.0.0.1:18080/x", "RESWARM_URL": "http://localhost:8086"}, nil, "ws://10.0.0.1:18080/ws-ua-usr"},
 		{"WithURL", map[string]string{"DEVICE_ENDPOINT_URL": "ws://10.0.0.1:18080/x"}, []Option{WithURL("ws://explicit/ws")}, "ws://explicit/ws"},
 	}
@@ -249,7 +249,7 @@ func TestStartCanBeRetriedAfterAFailure(t *testing.T) {
 	f := flock(t)
 	boom := errors.New("boom")
 	failures := 1
-	f.own.startFn = func(ctx context.Context, cfg crossbar.Config) error {
+	f.own.startFn = func(ctx context.Context, cfg wamp.Config) error {
 		if failures > 0 {
 			failures--
 			return boom
@@ -289,10 +289,10 @@ func TestStopIsIdempotent(t *testing.T) {
 	if n := f.own.stopCount(); n != 1 {
 		t.Errorf("connection stopped %d times", n)
 	}
-	if err := f.Start(context.Background()); !errors.Is(err, crossbar.ErrStopped) {
+	if err := f.Start(context.Background()); !errors.Is(err, wamp.ErrStopped) {
 		t.Errorf("Start after Stop: %v", err)
 	}
-	if _, err := f.ConnectToApp(context.Background(), "weatherstation"); !errors.Is(err, crossbar.ErrStopped) {
+	if _, err := f.ConnectToApp(context.Background(), "weatherstation"); !errors.Is(err, wamp.ErrStopped) {
 		t.Errorf("ConnectToApp after Stop: %v", err)
 	}
 }
@@ -376,7 +376,7 @@ func TestRunReturnsTheStartError(t *testing.T) {
 	checkGoroutines(t)
 	f := flock(t)
 	boom := errors.New("cannot connect")
-	f.own.startFn = func(context.Context, crossbar.Config) error { return boom }
+	f.own.startFn = func(context.Context, wamp.Config) error { return boom }
 	called := false
 	err := f.Run(context.Background(), func(context.Context) error { called = true; return nil })
 	if !errors.Is(err, boom) {
@@ -440,7 +440,7 @@ func filesOrSkip(t *testing.T, f *IronFlock) (fs *FileStore) {
 	return f.Files()
 }
 
-func TestNewUsesACrossbarConnection(t *testing.T) {
+func TestNewUsesAWampConnection(t *testing.T) {
 	setIdentityEnv(t)
 	log, _ := newTestLogger()
 	f, err := New(WithLogger(log))
@@ -448,9 +448,9 @@ func TestNewUsesACrossbarConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.Connection() == nil {
-		t.Error("Connection() must expose the *crossbar.Connection")
+		t.Error("Connection() must expose the *wamp.Connection")
 	}
-	if c, ok := f.newConn().(*crossbar.Connection); !ok || c == nil || c == f.Connection() {
+	if c, ok := f.newConn().(*wamp.Connection); !ok || c == nil || c == f.Connection() {
 		t.Error("consumed apps must get connections of their own")
 	}
 

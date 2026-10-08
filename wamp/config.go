@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"fmt"

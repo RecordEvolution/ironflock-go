@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 func TestOperationErrorMessages(t *testing.T) {
@@ -91,7 +91,7 @@ func TestMapCrossAppError(t *testing.T) {
 			t.Errorf("%v: %#v", tc.err, got)
 		}
 	}
-	for _, err := range []error{errors.New("boom"), wampErr("wamp.error.runtime_error"), wampErr(crossbar.ErrURINoAuthMethod)} {
+	for _, err := range []error{errors.New("boom"), wampErr("wamp.error.runtime_error"), wampErr(wamp.URINoAuthMethod)} {
 		if got := mapCrossAppError(err); got != nil {
 			t.Errorf("%v mapped to %v", err, got)
 		}

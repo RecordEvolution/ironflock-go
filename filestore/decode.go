@@ -15,7 +15,7 @@ import (
 // reads as its zero value instead of failing the whole call, numbers are
 // accepted in any numeric representation (including numeric strings), and
 // unknown fields are ignored. Payload values normally arrive normalized by
-// the crossbar package (nil, bool, string, int64, uint64, float64, []byte,
+// the wamp package (nil, bool, string, int64, uint64, float64, []byte,
 // []any, map[string]any), but other Go types are tolerated as well.
 
 // asMap returns v as a JSON-like object.

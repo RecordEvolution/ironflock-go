@@ -1,11 +1,11 @@
-// Package crossbar is the WAMP connection underneath the IronFlock SDK.
+// Package wamp is the WAMP connection underneath the IronFlock SDK.
 //
-// A Connection joins one realm of the IronFlock (Crossbar) router with
-// WAMP-CRA authentication over a msgpack WebSocket, keeps the session alive
-// across router restarts and network failures, and restores every
-// subscription and registration after each reconnect. Most apps use it only
-// through the ironflock package; it is exported for advanced use.
-package crossbar
+// A Connection joins one realm of the IronFlock router with WAMP-CRA
+// authentication over a msgpack WebSocket, keeps the session alive across
+// router restarts and network failures, and restores every subscription and
+// registration after each reconnect. Most apps use it only through the
+// ironflock package; it is exported for advanced use.
+package wamp
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // Reconnect and wait tunables. They mirror the Python and JavaScript SDKs.
@@ -66,16 +66,17 @@ const (
 // Errors returned by Connection.
 var (
 	// ErrNotConfigured: an operation or Start was attempted before Configure.
-	ErrNotConfigured = errors.New("crossbar: connection is not configured — call Configure() and Start() before performing WAMP operations")
+	ErrNotConfigured = errors.New("wamp: connection is not configured — call Configure() and Start() before performing WAMP operations")
 	// ErrNotConnected: no session became available within the wait window.
-	ErrNotConnected = errors.New("crossbar: not connected to the IronFlock router")
+	ErrNotConnected = errors.New("wamp: not connected to the IronFlock router")
 	// ErrStopped: the connection was stopped (Stop) or gave up for good.
-	ErrStopped = errors.New("crossbar: connection stopped")
+	ErrStopped = errors.New("wamp: connection stopped")
 )
 
 // AuthError reports that the router refused this connection's credentials or
-// role (one of FatalAuthReasons). It is fatal only for connections with
-// FailOnAuthError set; the primary connection keeps retrying.
+// role (a reason IsFatalAuthReason accepts). It is fatal only for
+// connections with FailOnAuthError set; the primary connection keeps
+// retrying.
 type AuthError struct {
 	Realm  string
 	Reason string
@@ -108,9 +109,9 @@ type Config struct {
 	AuthID     string
 	AuthSecret string
 
-	// FailOnAuthError treats an authentication/authorization denial (one of
-	// FatalAuthReasons) as fatal: reconnecting stops, OnAuthFailure is
-	// called, and a pending Start returns an *AuthError. It also bounds Start
+	// FailOnAuthError treats an authentication/authorization denial (a reason
+	// IsFatalAuthReason accepts) as fatal: reconnecting stops, OnAuthFailure
+	// is called, and a pending Start returns an *AuthError. It also bounds Start
 	// by FirstConnectTimeout. Used for consumed-app connections; the primary
 	// connection retries through every failure.
 	FailOnAuthError bool
@@ -208,7 +209,7 @@ func (c *Connection) Configure(cfg Config) error {
 		return c.stoppedErrLocked()
 	}
 	if c.started {
-		return errors.New("crossbar: Configure called after Start")
+		return errors.New("wamp: Configure called after Start")
 	}
 	if c.t.now == nil {
 		c.t = defaultTunables()
@@ -311,7 +312,7 @@ func (c *Connection) Start(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		c.abortStart()
-		return fmt.Errorf("crossbar: no session on realm %s: %w", c.cfg.Realm, ctx.Err())
+		return fmt.Errorf("wamp: no session on realm %s: %w", c.cfg.Realm, ctx.Err())
 	case <-timeout:
 		c.abortStart()
 		return &connectTimeoutError{realm: c.cfg.Realm, timeout: c.cfg.FirstConnectTimeout}
@@ -493,7 +494,7 @@ func (c *Connection) sleep(ctx context.Context, d time.Duration) error {
 // mid-call, is returned as it comes. retryWindow 0 waits the default session
 // timeout and does not retry.
 //
-// Errors from the router or callee are returned as *WampError.
+// Errors from the router or callee are returned as *Error.
 func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *CallOptions, retryWindow time.Duration) (*Result, error) {
 	if err := validateURI("procedure", procedure); err != nil {
 		return nil, err
@@ -515,7 +516,7 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 		if err != nil {
 			return nil, err
 		}
-		res, err := s.cli.Call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), wamp.Dict(kwargs), nil)
+		res, err := s.cli.Call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs), nil)
 		if err == nil {
 			return &Result{
 				Args:    normalizeList(res.Arguments),
@@ -524,8 +525,8 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 			}, nil
 		}
 		err = c.callError(procedure, err)
-		var werr *WampError
-		if retryWindow <= 0 || !errors.As(err, &werr) || werr.URI != ErrURINoSuchProcedure ||
+		var werr *Error
+		if retryWindow <= 0 || !errors.As(err, &werr) || werr.URI != URINoSuchProcedure ||
 			time.Now().Add(delay).After(deadline) {
 			return nil, err
 		}
@@ -539,7 +540,7 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 
 // Publish publishes an event, waiting up to waitWindow (0: the default
 // session timeout) for a session. With opts.Acknowledge it waits for the
-// router to confirm, and a refusal is returned as *WampError.
+// router to confirm, and a refusal is returned as *Error.
 func (c *Connection) Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *PublishOptions, waitWindow time.Duration) error {
 	if err := validateURI("topic", topic); err != nil {
 		return err
@@ -551,14 +552,14 @@ func (c *Connection) Publish(ctx context.Context, topic string, args []any, kwar
 	if err != nil {
 		return err
 	}
-	err = s.cli.Publish(topic, publishOptions(opts), wireArgs(args, kwargs), wamp.Dict(kwargs))
+	err = s.cli.Publish(topic, publishOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs))
 	return c.requestError("publish to topic '"+topic+"'", publishPrefix, err)
 }
 
 // Subscribe subscribes handler to topic and tracks the subscription so it is
 // restored after every reconnect. Several handlers may subscribe to the same
 // topic (and match policy): they share one WAMP subscription and each
-// receives every event. A refusal is returned as *WampError.
+// receives every event. A refusal is returned as *Error.
 //
 // The WAMP subscription takes the options of the first subscription of its
 // topic. Subscribing a topic that is already subscribed with a different
@@ -569,7 +570,7 @@ func (c *Connection) Subscribe(ctx context.Context, topic string, handler EventH
 		return nil, err
 	}
 	if handler == nil {
-		return nil, errors.New("crossbar: subscribe: nil handler")
+		return nil, errors.New("wamp: subscribe: nil handler")
 	}
 	var extra map[string]any
 	if opts != nil {
@@ -604,7 +605,7 @@ func optMatch(opts *SubscribeOptions) string {
 
 // subscribeOn subscribes on s. retry reports that s was lost before the
 // subscription could be made, so the caller should try the next session.
-func (c *Connection) subscribeOn(s *session, topic, match string, options wamp.Dict, handler EventHandler) (sub *Subscription, retry bool, err error) {
+func (c *Connection) subscribeOn(s *session, topic, match string, options nxwamp.Dict, handler EventHandler) (sub *Subscription, retry bool, err error) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	if c.currentSession() != s {
@@ -612,7 +613,7 @@ func (c *Connection) subscribeOn(s *session, topic, match string, options wamp.D
 	}
 	g := c.findGroup(topic)
 	if g != nil && g.match != match {
-		return nil, false, fmt.Errorf("crossbar: topic '%s' is already subscribed with match policy %q; "+
+		return nil, false, fmt.Errorf("wamp: topic '%s' is already subscribed with match policy %q; "+
 			"one connection can subscribe a topic with only one match policy", topic, matchName(g.match))
 	}
 	sub = &Subscription{conn: c, topic: topic, match: match, handler: handler}
@@ -716,7 +717,7 @@ func (c *Connection) dropSubscription(g *subGroup) error {
 
 // Register registers handler as procedure and tracks the registration so it
 // is restored after every reconnect. ForceReregister defaults to true. A
-// refusal is returned as *WampError.
+// refusal is returned as *Error.
 //
 // A procedure can be registered once per connection: registering it again
 // before Unregister fails with wamp.error.procedure_already_exists.
@@ -725,7 +726,7 @@ func (c *Connection) Register(ctx context.Context, procedure string, handler Inv
 		return nil, err
 	}
 	if handler == nil {
-		return nil, errors.New("crossbar: register: nil handler")
+		return nil, errors.New("wamp: register: nil handler")
 	}
 	var match string
 	var extra map[string]any
@@ -763,7 +764,7 @@ func (c *Connection) registerOn(s *session, reg *Registration) (retry bool, err 
 	}
 	for _, r := range c.regs {
 		if r.procedure == reg.procedure {
-			return false, &WampError{URI: ErrURIProcedureExists, Args: []any{
+			return false, &Error{URI: URIProcedureAlreadyExists, Args: []any{
 				fmt.Sprintf("procedure '%s' is already registered on this connection", reg.procedure)}}
 		}
 	}
@@ -811,7 +812,7 @@ func isGone(err error, goneURI string) bool {
 	if err == nil {
 		return false
 	}
-	var werr *WampError
+	var werr *Error
 	if errors.As(err, &werr) {
 		return werr.URI == goneURI
 	}
@@ -863,7 +864,7 @@ type Registration struct {
 	procedure string
 	handler   InvocationHandler
 
-	options wamp.Dict
+	options nxwamp.Dict
 	sess    atomic.Pointer[session] // session holding the WAMP registration
 	removed atomic.Bool
 }

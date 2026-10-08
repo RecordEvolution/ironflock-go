@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -22,14 +23,18 @@ const (
 	maxUint32      = math.MaxUint32
 )
 
-// SQLOperators is the data backend's filter operator vocabulary. An operator
-// outside it is logged as a warning, not rejected: the server is the
-// authority and may accept operators this release predates.
-var SQLOperators = []string{
+// sqlOperators is the vocabulary SQLOperators returns.
+var sqlOperators = []string{
 	"=", "!=", "<>", ">", "<", ">=", "<=",
 	"LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
 	"IN", "NOT IN", "IS NULL", "IS NOT NULL",
 }
+
+// SQLOperators returns the data backend's filter operator vocabulary. An
+// operator outside it is logged as a warning, not rejected: the server is
+// the authority and may accept operators this release predates. The slice
+// is a copy; changing it does not change the SDK's check.
+func SQLOperators() []string { return slices.Clone(sqlOperators) }
 
 // DownSampleMethod is the aggregation a series query applies per time bucket.
 type DownSampleMethod string
@@ -320,18 +325,11 @@ func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[
 		return nil, invalidf("%s: predicate on column %q has no operator", path, f.Column)
 	}
 	op := strings.ToUpper(strings.TrimSpace(f.Operator))
-	known := false
-	for _, k := range SQLOperators {
-		if op == k {
-			known = true
-			break
-		}
-	}
-	if !known {
+	if !slices.Contains(sqlOperators, op) {
 		if log == nil {
 			log = slog.Default()
 		}
-		log.Warn(fmt.Sprintf("Operator '%s' is not in standard list: %v", f.Operator, SQLOperators))
+		log.Warn(fmt.Sprintf("Operator '%s' is not in standard list: %v", f.Operator, sqlOperators))
 	}
 	out := map[string]any{"column": f.Column, "operator": f.Operator}
 

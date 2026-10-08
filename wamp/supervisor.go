@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/gammazero/nexus/v3/client"
 	"github.com/gammazero/nexus/v3/transport"
 	"github.com/gammazero/nexus/v3/transport/serialize"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 	"github.com/gammazero/nexus/v3/wamp/crsign"
 )
 
@@ -96,7 +96,7 @@ func (b *backoff) resetStreak() {
 // observe records why the last attempt or session ended. It reports true
 // exactly when the realm has now been missing long enough to slow down.
 func (b *backoff) observe(reason string) bool {
-	if reason != ErrURINoSuchRealm {
+	if reason != URINoSuchRealm {
 		b.resetStreak()
 		return false
 	}
@@ -207,11 +207,11 @@ func (c *Connection) dialAndJoin() (*session, string, error) {
 	stopJoin := context.AfterFunc(c.runCtx, p.Close)
 	cli, err := client.NewClient(p, client.Config{
 		Realm:        c.cfg.Realm,
-		HelloDetails: wamp.Dict{"authid": authID},
+		HelloDetails: nxwamp.Dict{"authid": authID},
 		AuthHandlers: map[string]client.AuthFunc{
-			"wampcra": func(ch *wamp.Challenge) (string, wamp.Dict) {
+			"wampcra": func(ch *nxwamp.Challenge) (string, nxwamp.Dict) {
 				c.log.Debug("WAMP-CRA challenge received", "authmethod", ch.AuthMethod)
-				return crsign.RespondChallenge(secret, ch, nil), wamp.Dict{}
+				return crsign.RespondChallenge(secret, ch, nil), nxwamp.Dict{}
 			},
 		},
 		ResponseTimeout: c.t.responseTimeout,
@@ -375,7 +375,7 @@ func (c *Connection) leave(s *session) bool {
 	timer := time.NewTimer(c.t.responseTimeout)
 	defer timer.Stop()
 	select {
-	case s.peer.Send() <- &wamp.Goodbye{Reason: wamp.CloseRealm, Details: wamp.Dict{}}:
+	case s.peer.Send() <- &nxwamp.Goodbye{Reason: nxwamp.CloseRealm, Details: nxwamp.Dict{}}:
 	case <-s.cli.Done():
 		return true
 	case <-s.peer.Done():
@@ -397,7 +397,7 @@ func (c *Connection) leave(s *session) bool {
 // tracked, inactive, and is registered again after the next reconnect — the
 // Python SDK's behaviour. It runs on the receive path, so the lookup of the
 // procedure, which needs stateMu, happens on a goroutine of its own.
-func (c *Connection) registrationEvicted(id wamp.ID) {
+func (c *Connection) registrationEvicted(id nxwamp.ID) {
 	go func() {
 		c.stateMu.Lock()
 		s := c.currentSession()
@@ -471,7 +471,7 @@ func (c *Connection) forceClose() {
 func toDialURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("crossbar: invalid router URL %q: %w", raw, err)
+		return "", fmt.Errorf("wamp: invalid router URL %q: %w", raw, err)
 	}
 	switch u.Scheme {
 	case "ws", "wss":
@@ -480,10 +480,10 @@ func toDialURL(raw string) (string, error) {
 	case "https":
 		u.Scheme = "wss"
 	default:
-		return "", fmt.Errorf("crossbar: invalid router URL %q: scheme must be ws, wss, http or https", raw)
+		return "", fmt.Errorf("wamp: invalid router URL %q: scheme must be ws, wss, http or https", raw)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("crossbar: invalid router URL %q: missing host", raw)
+		return "", fmt.Errorf("wamp: invalid router URL %q: missing host", raw)
 	}
 	return u.String(), nil
 }

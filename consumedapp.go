@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // Cross-app procedures on the app's own realm.
@@ -125,8 +125,9 @@ func (e *consumedEntry) wait(ctx context.Context) (*ConsumedApp, error) {
 type ConsumedApp struct {
 	// App is the provider app's name.
 	App string
-	// Stage is the provider stage this handle is connected to ("dev" or
-	// "prod").
+	// Stage is the provider stage this handle is connected to, in lower
+	// case: "dev" or "prod". (IronFlock.Stage returns a Stage, "DEV" or
+	// "PROD"; Stage.Lower converts it.)
 	Stage string
 	// Tables and Transforms are what the provider shares on Stage.
 	Tables     []TableInfo
@@ -141,8 +142,8 @@ type ConsumedApp struct {
 }
 
 // Connection returns the underlying connection to the provider's realm.
-func (a *ConsumedApp) Connection() *crossbar.Connection {
-	c, _ := a.conn.(*crossbar.Connection)
+func (a *ConsumedApp) Connection() *wamp.Connection {
+	c, _ := a.conn.(*wamp.Connection)
 	return c
 }
 
@@ -547,7 +548,7 @@ func (f *IronFlock) cachedOpen(key string, open func(ctx context.Context, evict 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopped {
-		return nil, fmt.Errorf("ironflock: cannot connect to another app after Stop: %w", crossbar.ErrStopped)
+		return nil, fmt.Errorf("ironflock: cannot connect to another app after Stop: %w", wamp.ErrStopped)
 	}
 	if e, ok := f.consumed[key]; ok {
 		return e, nil
@@ -575,7 +576,7 @@ func (f *IronFlock) runOpen(e *consumedEntry, evict func(), open func(ctx contex
 				f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", app.App, cerr))
 			}
 			cancel()
-			err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", app.App, app.Stage, crossbar.ErrStopped)
+			err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", app.App, app.Stage, wamp.ErrStopped)
 			app = nil
 		}
 	}
@@ -650,11 +651,11 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 			return nil, err
 		}
 	}
-	appStage := crossbar.StageDevelopment
+	appStage := wamp.StageDevelopment
 	if stage == "prod" {
-		appStage = crossbar.StageProduction
+		appStage = wamp.StageProduction
 	}
-	realm := crossbar.RealmName(f.swarmKey, info.ProviderAppKey, appStage)
+	realm := wamp.RealmName(f.swarmKey, info.ProviderAppKey, appStage)
 	op := fmt.Sprintf("Connection to app '%s' (%s)", info.App, stage)
 	denial := func(reason string, cause error) *CrossAppAccessError {
 		return &CrossAppAccessError{
@@ -671,7 +672,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		opened bool
 		denied *CrossAppAccessError
 	)
-	cfg := crossbar.Config{
+	cfg := wamp.Config{
 		SwarmKey:        f.swarmKey,
 		AppKey:          info.ProviderAppKey,
 		Stage:           appStage,
@@ -682,7 +683,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		FailOnAuthError: true,
 		Logger:          f.log,
 		OnAuthFailure: func(reason string) {
-			err := denial(reason, &crossbar.AuthError{Realm: realm, Reason: reason})
+			err := denial(reason, &wamp.AuthError{Realm: realm, Reason: reason})
 			mu.Lock()
 			denied = err
 			wasOpened := opened
@@ -715,7 +716,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		cctx, cancel := f.cleanupContext(ctx)
 		_ = conn.Stop(cctx)
 		cancel()
-		var aerr *crossbar.AuthError
+		var aerr *wamp.AuthError
 		if errors.As(err, &aerr) {
 			return nil, denial(aerr.Reason, err)
 		}

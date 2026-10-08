@@ -144,7 +144,7 @@ them fail with an error wrapping `ironflock.ErrMissingConfig`.
 | `Run(ctx, main func(ctx) error) error` | `Start`, run `main` (or wait for `ctx`), `Stop`. Stops on SIGINT/SIGTERM and cancels `main`'s context |
 | `IsConnected() bool` | Whether the connection is currently established |
 | `Files() *filestore.FileStore` | The app's managed object storage — see [Managed File Storage](#managed-file-storage) |
-| `Connection() *crossbar.Connection` | The underlying connection, for advanced use |
+| `Connection() *wamp.Connection` | The underlying connection, for advanced use |
 | `Stage()`, `SerialNumber()`, `DeviceKey()`, `DeviceName()`, `AppName()`, `SwarmKey()`, `AppKey()` | The resolved identity |
 
 ### `Publish(ctx, topic, args ...any) error`
@@ -511,14 +511,14 @@ re-registered its procedures yet. Other operations wait up to 10 s for a connect
 | `ironflock.ErrInvalidArgument` | `errors.Is` | Invalid parameters (the Python SDK's `ValueError`) |
 | `ironflock.ErrMissingConfig` | `errors.Is` | `SWARM_KEY`, `APP_KEY` or `DEVICE_KEY` is not set |
 | `*ironflock.OperationError` | `errors.As` | A failed operation; the message names the operation and the WAMP error |
-| `*crossbar.WampError` (`ironflock.WampError`) | `errors.As`, `ironflock.WampURI(err)` | The router or callee refused; carries the URI and payload |
+| `*wamp.Error` (`ironflock.WampError`) | `errors.As`, `ironflock.WampURI(err)` | The router or callee refused; carries the URI and payload |
 | `*ironflock.CrossAppAccessError` | `errors.As` | Cross-app access was declined or misused (`Code`) |
 | `*filestore.Error` | `errors.As` | A file operation failed (`Code`) |
-| `crossbar.ErrNotConnected` | `errors.Is` | No connection within the wait window |
+| `wamp.ErrNotConnected` | `errors.Is` | No connection within the wait window |
 
 ## Advanced usage
 
-`ifl.Connection()` is the underlying `*crossbar.Connection`, a self-healing WAMP session with the methods
+`ifl.Connection()` is the underlying `*wamp.Connection`, a self-healing WAMP session with the methods
 `Call`, `Publish`, `Subscribe`, `Register` and friends; it can also be used on its own. The rules in
 [URIs an app may use](#uris-an-app-may-use) apply to it as well.
 
@@ -543,7 +543,7 @@ go test -race ./...           # unit tests
 go vet ./...
 ```
 
-End-to-end tests against a real Crossbar router, a fake IronFlock platform and the Python/JavaScript SDKs
+End-to-end tests against ironflock-router, a fake IronFlock platform and the Python/JavaScript SDKs
 live in [integration/](integration); see its README.
 
 ## License

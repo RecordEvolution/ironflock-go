@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // fakeCall is one recorded Call.
@@ -21,7 +21,7 @@ type fakeCall struct {
 	Procedure string
 	Args      []any
 	Kwargs    map[string]any
-	Opts      *crossbar.CallOptions
+	Opts      *wamp.CallOptions
 	Window    time.Duration
 }
 
@@ -30,25 +30,25 @@ type fakePublish struct {
 	Topic  string
 	Args   []any
 	Kwargs map[string]any
-	Opts   *crossbar.PublishOptions
+	Opts   *wamp.PublishOptions
 	Window time.Duration
 }
 
 // fakeSub is one recorded Subscribe.
 type fakeSub struct {
 	Topic   string
-	Handler crossbar.EventHandler
-	Opts    *crossbar.SubscribeOptions
-	Sub     *crossbar.Subscription
+	Handler wamp.EventHandler
+	Opts    *wamp.SubscribeOptions
+	Sub     *wamp.Subscription
 	Removed bool
 }
 
 // fakeReg is one recorded Register.
 type fakeReg struct {
 	Procedure string
-	Handler   crossbar.InvocationHandler
-	Opts      *crossbar.RegisterOptions
-	Reg       *crossbar.Registration
+	Handler   wamp.InvocationHandler
+	Opts      *wamp.RegisterOptions
+	Reg       *wamp.Registration
 	Removed   bool
 }
 
@@ -58,7 +58,7 @@ type fakeReg struct {
 type fakeConn struct {
 	mu sync.Mutex
 
-	cfg        *crossbar.Config
+	cfg        *wamp.Config
 	configures int
 	starts     int
 	stops      int
@@ -70,19 +70,19 @@ type fakeConn struct {
 	subs      []*fakeSub
 	regs      []*fakeReg
 
-	callFn         func(c fakeCall) (*crossbar.Result, error)
+	callFn         func(c fakeCall) (*wamp.Result, error)
 	publishFn      func(p fakePublish) error
 	subscribeFn    func(topic string) error
 	registerFn     func(procedure string) error
 	unsubscribeErr error
 	configureErr   error
-	startFn        func(ctx context.Context, cfg crossbar.Config) error
+	startFn        func(ctx context.Context, cfg wamp.Config) error
 	stopErr        error
 }
 
 var _ wampConn = (*fakeConn)(nil)
 
-func (c *fakeConn) Configure(cfg crossbar.Config) error {
+func (c *fakeConn) Configure(cfg wamp.Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.configures++
@@ -97,7 +97,7 @@ func (c *fakeConn) Start(ctx context.Context) error {
 	c.mu.Lock()
 	c.starts++
 	fn := c.startFn
-	var cfg crossbar.Config
+	var cfg wamp.Config
 	if c.cfg != nil {
 		cfg = *c.cfg
 	}
@@ -136,7 +136,7 @@ func (c *fakeConn) URL() string {
 	return c.cfg.URL
 }
 
-func (c *fakeConn) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *crossbar.CallOptions, retryWindow time.Duration) (*crossbar.Result, error) {
+func (c *fakeConn) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retryWindow time.Duration) (*wamp.Result, error) {
 	call := fakeCall{Procedure: procedure, Args: args, Kwargs: kwargs, Opts: opts, Window: retryWindow}
 	c.mu.Lock()
 	c.calls = append(c.calls, call)
@@ -145,10 +145,10 @@ func (c *fakeConn) Call(ctx context.Context, procedure string, args []any, kwarg
 	if fn != nil {
 		return fn(call)
 	}
-	return &crossbar.Result{}, nil
+	return &wamp.Result{}, nil
 }
 
-func (c *fakeConn) Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *crossbar.PublishOptions, waitWindow time.Duration) error {
+func (c *fakeConn) Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *wamp.PublishOptions, waitWindow time.Duration) error {
 	pub := fakePublish{Topic: topic, Args: args, Kwargs: kwargs, Opts: opts, Window: waitWindow}
 	c.mu.Lock()
 	c.publishes = append(c.publishes, pub)
@@ -160,7 +160,7 @@ func (c *fakeConn) Publish(ctx context.Context, topic string, args []any, kwargs
 	return nil
 }
 
-func (c *fakeConn) Subscribe(ctx context.Context, topic string, handler crossbar.EventHandler, opts *crossbar.SubscribeOptions) (*crossbar.Subscription, error) {
+func (c *fakeConn) Subscribe(ctx context.Context, topic string, handler wamp.EventHandler, opts *wamp.SubscribeOptions) (*wamp.Subscription, error) {
 	c.mu.Lock()
 	fn := c.subscribeFn
 	c.mu.Unlock()
@@ -169,14 +169,14 @@ func (c *fakeConn) Subscribe(ctx context.Context, topic string, handler crossbar
 			return nil, err
 		}
 	}
-	s := &fakeSub{Topic: topic, Handler: handler, Opts: opts, Sub: new(crossbar.Subscription)}
+	s := &fakeSub{Topic: topic, Handler: handler, Opts: opts, Sub: new(wamp.Subscription)}
 	c.mu.Lock()
 	c.subs = append(c.subs, s)
 	c.mu.Unlock()
 	return s.Sub, nil
 }
 
-func (c *fakeConn) Unsubscribe(ctx context.Context, sub *crossbar.Subscription) error {
+func (c *fakeConn) Unsubscribe(ctx context.Context, sub *wamp.Subscription) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, s := range c.subs {
@@ -187,7 +187,7 @@ func (c *fakeConn) Unsubscribe(ctx context.Context, sub *crossbar.Subscription) 
 	return c.unsubscribeErr
 }
 
-func (c *fakeConn) Register(ctx context.Context, procedure string, handler crossbar.InvocationHandler, opts *crossbar.RegisterOptions) (*crossbar.Registration, error) {
+func (c *fakeConn) Register(ctx context.Context, procedure string, handler wamp.InvocationHandler, opts *wamp.RegisterOptions) (*wamp.Registration, error) {
 	c.mu.Lock()
 	fn := c.registerFn
 	c.mu.Unlock()
@@ -196,14 +196,14 @@ func (c *fakeConn) Register(ctx context.Context, procedure string, handler cross
 			return nil, err
 		}
 	}
-	r := &fakeReg{Procedure: procedure, Handler: handler, Opts: opts, Reg: new(crossbar.Registration)}
+	r := &fakeReg{Procedure: procedure, Handler: handler, Opts: opts, Reg: new(wamp.Registration)}
 	c.mu.Lock()
 	c.regs = append(c.regs, r)
 	c.mu.Unlock()
 	return r.Reg, nil
 }
 
-func (c *fakeConn) Unregister(ctx context.Context, reg *crossbar.Registration) error {
+func (c *fakeConn) Unregister(ctx context.Context, reg *wamp.Registration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, r := range c.regs {
@@ -215,11 +215,11 @@ func (c *fakeConn) Unregister(ctx context.Context, reg *crossbar.Registration) e
 }
 
 // config returns the Configure argument (zero when not configured).
-func (c *fakeConn) config() crossbar.Config {
+func (c *fakeConn) config() wamp.Config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cfg == nil {
-		return crossbar.Config{}
+		return wamp.Config{}
 	}
 	return *c.cfg
 }
@@ -303,9 +303,9 @@ func (c *fakeConn) startCount() int {
 }
 
 // fire delivers ev to every live subscription of topic, synchronously.
-func (c *fakeConn) fire(topic string, ev *crossbar.Event) {
+func (c *fakeConn) fire(topic string, ev *wamp.Event) {
 	c.mu.Lock()
-	var handlers []crossbar.EventHandler
+	var handlers []wamp.EventHandler
 	for _, s := range c.subs {
 		if s.Topic == topic && !s.Removed {
 			handlers = append(handlers, s.Handler)
@@ -461,11 +461,11 @@ func flock(t *testing.T, opts ...Option) *testFlock {
 }
 
 // resultOf returns a call result whose single positional value is v.
-func resultOf(v any) *crossbar.Result { return &crossbar.Result{Args: []any{v}} }
+func resultOf(v any) *wamp.Result { return &wamp.Result{Args: []any{v}} }
 
 // wampErr returns a router refusal.
-func wampErr(uri string, args ...any) *crossbar.WampError {
-	return &crossbar.WampError{URI: uri, Args: args}
+func wampErr(uri string, args ...any) *wamp.Error {
+	return &wamp.Error{URI: uri, Args: args}
 }
 
 // checkGoroutines fails the test when, at its end, more goroutines run than

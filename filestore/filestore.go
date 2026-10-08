@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // WAMP procedures of the file service. The namespace is an argument, not a
@@ -50,9 +50,9 @@ const (
 	DefaultListLimit = 200
 )
 
-// Caller performs WAMP calls; *crossbar.Connection implements it.
+// Caller performs WAMP calls; *wamp.Connection implements it.
 type Caller interface {
-	Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *crossbar.CallOptions, retryWindow time.Duration) (*crossbar.Result, error)
+	Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retryWindow time.Duration) (*wamp.Result, error)
 }
 
 // FileStore is the app's managed object storage. It is safe for concurrent

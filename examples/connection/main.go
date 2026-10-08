@@ -9,18 +9,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	conn := crossbar.NewConnection()
-	err := conn.Configure(crossbar.Config{
+	conn := wamp.NewConnection()
+	err := conn.Configure(wamp.Config{
 		SwarmKey: 123,
 		AppKey:   456,
-		Stage:    crossbar.StageFromEnv(os.Getenv("ENV")),
+		Stage:    wamp.StageFromEnv(os.Getenv("ENV")),
 		// URL, serial number and credential come from the environment when
 		// left empty.
 		OnConnect:    func() { log.Print("connected") },
@@ -34,14 +34,14 @@ func main() {
 	}
 	defer conn.Stop(context.Background())
 
-	_, err = conn.Subscribe(ctx, "com.example.status", func(ev *crossbar.Event) {
+	_, err = conn.Subscribe(ctx, "com.example.status", func(ev *wamp.Event) {
 		log.Printf("status: %v %v", ev.Args, ev.Kwargs)
-	}, &crossbar.SubscribeOptions{})
+	}, &wamp.SubscribeOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	err = conn.Publish(ctx, "com.example.status", []any{"online"}, nil,
-		&crossbar.PublishOptions{Acknowledge: true}, 0)
+		&wamp.PublishOptions{Acknowledge: true}, 0)
 	if err != nil {
 		log.Fatal(err)
 	}

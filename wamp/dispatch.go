@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // serialExecutor runs submitted functions one at a time, in submission
@@ -76,7 +76,7 @@ func (e *serialExecutor) run() {
 type subGroup struct {
 	topic   string
 	match   string
-	options wamp.Dict
+	options nxwamp.Dict
 
 	sess    atomic.Pointer[session] // session holding the WAMP subscription
 	handles atomic.Pointer[[]*Subscription]
@@ -104,13 +104,13 @@ func (g *subGroup) remove(s *Subscription) (remaining int) {
 // onEvent is the nexus event handler. It runs on the client's receive loop,
 // so it only queues: a handler running here could not even wait for the
 // result of its own Call.
-func (g *subGroup) onEvent(raw *wamp.Event) {
+func (g *subGroup) onEvent(raw *nxwamp.Event) {
 	for _, s := range g.list() {
 		s.deliver(raw)
 	}
 }
 
-func (s *Subscription) deliver(raw *wamp.Event) {
+func (s *Subscription) deliver(raw *nxwamp.Event) {
 	if s.removed.Load() {
 		return
 	}
@@ -140,14 +140,14 @@ func (c *Connection) runEventHandler(s *Subscription, ev *Event) {
 
 // invoke is the nexus invocation handler of a registration. nexus runs it on
 // a goroutine of its own per invocation.
-func (r *Registration) invoke(ctx context.Context, raw *wamp.Invocation) client.InvokeResult {
+func (r *Registration) invoke(ctx context.Context, raw *nxwamp.Invocation) client.InvokeResult {
 	inv := &Invocation{
 		Procedure: r.procedure,
 		Args:      normalizeList(raw.Arguments),
 		Kwargs:    normalizeDict(raw.ArgumentsKw),
 		Details:   normalizeDict(raw.Details),
 	}
-	if p, ok := inv.Details[wamp.OptProcedure].(string); ok && p != "" {
+	if p, ok := inv.Details[nxwamp.OptProcedure].(string); ok && p != "" {
 		inv.Procedure = p
 	}
 	value, err := r.conn.runInvocationHandler(ctx, r, inv)
@@ -168,11 +168,11 @@ func (c *Connection) runInvocationHandler(ctx context.Context, r *Registration, 
 // ERROR sent back to the caller.
 func invokeResult(value any, err error) client.InvokeResult {
 	if err != nil {
-		var werr *WampError
+		var werr *Error
 		if errors.As(err, &werr) && werr != nil && werr.URI != "" {
-			return client.InvokeResult{Err: wamp.URI(werr.URI), Args: wireArgs(werr.Args, werr.Kwargs), Kwargs: werr.Kwargs}
+			return client.InvokeResult{Err: nxwamp.URI(werr.URI), Args: wireArgs(werr.Args, werr.Kwargs), Kwargs: werr.Kwargs}
 		}
-		return client.InvokeResult{Err: ErrURIRuntimeError, Args: wamp.List{err.Error()}}
+		return client.InvokeResult{Err: URIRuntimeError, Args: nxwamp.List{err.Error()}}
 	}
 	switch v := value.(type) {
 	case nil:
@@ -185,7 +185,7 @@ func invokeResult(value any, err error) client.InvokeResult {
 		}
 		return client.InvokeResult{Args: wireArgs(v.Args, v.Kwargs), Kwargs: v.Kwargs}
 	}
-	return client.InvokeResult{Args: wamp.List{value}}
+	return client.InvokeResult{Args: nxwamp.List{value}}
 }
 
 // runCallback runs a lifecycle callback on the callback executor, in order

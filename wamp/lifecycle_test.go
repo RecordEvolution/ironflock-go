@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 func TestJoinWampCRAOverMsgpack(t *testing.T) {
@@ -71,10 +71,10 @@ func TestFailOnAuthErrorStopsAtWrongSecret(t *testing.T) {
 	if !errors.As(err, &authErr) {
 		t.Fatalf("Start = %T %v, want *AuthError", err, err)
 	}
-	if authErr.Realm != testRealm || authErr.Reason != ErrURIAuthenticationFail {
+	if authErr.Realm != testRealm || authErr.Reason != URIAuthenticationFailed {
 		t.Fatalf("AuthError = %+v", authErr)
 	}
-	if got := recv(t, reasons, "OnAuthFailure"); got != ErrURIAuthenticationFail {
+	if got := recv(t, reasons, "OnAuthFailure"); got != URIAuthenticationFailed {
 		t.Fatalf("OnAuthFailure(%q)", got)
 	}
 	time.Sleep(100 * time.Millisecond) // several retry periods
@@ -102,15 +102,15 @@ func TestFatalSessionCloseWithFailOnAuthError(t *testing.T) {
 	})
 
 	// The grant is revoked while the session is up.
-	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", ErrURINotAuthorized, "revoked", 0); n != 1 {
+	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", URINotAuthorized, "revoked", 0); n != 1 {
 		t.Fatalf("killed %d sessions", n)
 	}
-	if got := recv(t, reasons, "OnAuthFailure"); got != ErrURINotAuthorized {
+	if got := recv(t, reasons, "OnAuthFailure"); got != URINotAuthorized {
 		t.Fatalf("OnAuthFailure(%q)", got)
 	}
 	err := c.WaitSession(context.Background(), 50*time.Millisecond)
 	var authErr *AuthError
-	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != ErrURINotAuthorized {
+	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != URINotAuthorized {
 		t.Fatalf("WaitSession = %v", err)
 	}
 	if n := len(tr.auth.attempts()); n != 1 {
@@ -182,7 +182,7 @@ func TestStartWaitsForMissingRealm(t *testing.T) {
 	var refusals atomic.Int32
 	c, _ := newTestConn(t, tr, func(_ *Config, c *Connection) {
 		c.t.onRetry = func(reason string, _ time.Duration) {
-			if reason == ErrURINoSuchRealm {
+			if reason == URINoSuchRealm {
 				refusals.Add(1)
 			}
 		}
@@ -239,7 +239,7 @@ func TestNoSuchRealmStreakWidensAndResets(t *testing.T) {
 		t.Fatalf("slow-down logged %d times\n%s", n, logs)
 	}
 	for _, r := range snapshot() {
-		if r.reason != ErrURINoSuchRealm {
+		if r.reason != URINoSuchRealm {
 			t.Fatalf("unexpected retry reason %q", r.reason)
 		}
 	}
@@ -458,7 +458,7 @@ func TestCallbacksOnConnectAndDisconnect(t *testing.T) {
 	recv(t, connects, "OnConnect after reconnect")
 
 	tr.removeRealm()
-	if got := recv(t, disconnects, "OnDisconnect"); got != string(wamp.CloseSystemShutdown) {
+	if got := recv(t, disconnects, "OnDisconnect"); got != string(nxwamp.CloseSystemShutdown) {
 		t.Fatalf("OnDisconnect(%q), want system_shutdown", got)
 	}
 	eventually(t, 2*time.Second, "IsOpen false", func() bool { return !c.IsOpen() })
@@ -498,7 +498,7 @@ func TestStopSendsGoodbye(t *testing.T) {
 	c, _ := startTestConn(t, tr)
 	obs := tr.local(t)
 	left := make(chan struct{}, 1)
-	if err := obs.Subscribe(string(wamp.MetaEventSessionOnLeave), func(*wamp.Event) { left <- struct{}{} }, nil); err != nil {
+	if err := obs.Subscribe(string(nxwamp.MetaEventSessionOnLeave), func(*nxwamp.Event) { left <- struct{}{} }, nil); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

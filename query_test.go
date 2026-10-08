@@ -3,6 +3,7 @@ package ironflock
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -215,5 +216,31 @@ func TestTimeRangeHelpers(t *testing.T) {
 		if _, err := timeRangeWire(&TimeRange{Start: bad}); !errors.Is(err, ErrInvalidArgument) {
 			t.Errorf("%#v: %v", bad, err)
 		}
+	}
+}
+
+// SQLOperators hands out a copy: changing it cannot change which operators
+// the SDK treats as known.
+func TestSQLOperatorsIsACopy(t *testing.T) {
+	want := []string{
+		"=", "!=", "<>", ">", "<", ">=", "<=",
+		"LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE",
+		"IN", "NOT IN", "IS NULL", "IS NOT NULL",
+	}
+	ops := SQLOperators()
+	if !reflect.DeepEqual(ops, want) {
+		t.Fatalf("SQLOperators() = %q, want %q", ops, want)
+	}
+	ops[0] = "REGEXP"
+	if got := SQLOperators(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the vocabulary changed through a returned slice: %q", got)
+	}
+	log, logs := newTestLogger()
+	q := &TableQueryParams{Limit: 1, FilterAnd: []Filter{Where("a", "REGEXP", "x"), Where("b", "=", 1)}}
+	if _, err := queryWire(q, MaxQueryLimit, log); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(logs.String(), "is not in standard list"); n != 1 {
+		t.Fatalf("%d operator warnings, want 1 (for REGEXP):\n%s", n, logs)
 	}
 }

@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -59,7 +59,7 @@ type Invocation struct {
 //   - a Result or *Result: sent as its Args and Kwargs
 //   - anything else: sent as the single positional result argument
 //
-// A returned *WampError is sent with its URI, Args and Kwargs. Any other error
+// A returned *Error is sent with its URI, Args and Kwargs. Any other error
 // is sent as wamp.error.runtime_error with the error text as its argument.
 // ctx is cancelled when the caller cancels the call or the session ends.
 type InvocationHandler func(ctx context.Context, inv *Invocation) (any, error)
@@ -93,17 +93,17 @@ func (r *Result) Decode(dst any) error {
 	return nil
 }
 
-// WampError is an error the router or a callee answered with. URI is the WAMP
-// error URI (e.g. "wamp.error.no_such_procedure"); Args and Kwargs carry the
-// error payload.
-type WampError struct {
+// Error is an error the router or a callee answered with. URI is the WAMP
+// error URI (e.g. URINoSuchProcedure); Args and Kwargs carry the error
+// payload.
+type Error struct {
 	URI    string
 	Args   []any
 	Kwargs map[string]any
 }
 
 // Error implements error: "<uri>" followed by the JSON-encoded Args, if any.
-func (e *WampError) Error() string {
+func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
@@ -122,33 +122,25 @@ func (e *WampError) Error() string {
 
 // Well-known WAMP error URIs.
 const (
-	ErrURINoSuchProcedure     = "wamp.error.no_such_procedure"
-	ErrURINoSuchRealm         = "wamp.error.no_such_realm"
-	ErrURINotAuthorized       = "wamp.error.not_authorized"
-	ErrURIAuthorizationFailed = "wamp.error.authorization_failed"
-	ErrURIAuthenticationFail  = "wamp.error.authentication_failed"
-	ErrURINoAuthMethod        = "wamp.error.no_auth_method"
-	ErrURIRuntimeError        = "wamp.error.runtime_error"
-	ErrURICanceled            = "wamp.error.canceled"
-	ErrURIProcedureExists     = "wamp.error.procedure_already_exists"
+	URINoSuchProcedure        = "wamp.error.no_such_procedure"
+	URINoSuchRealm            = "wamp.error.no_such_realm"
+	URINotAuthorized          = "wamp.error.not_authorized"
+	URIAuthorizationFailed    = "wamp.error.authorization_failed"
+	URIAuthenticationFailed   = "wamp.error.authentication_failed"
+	URINoAuthMethod           = "wamp.error.no_auth_method"
+	URIRuntimeError           = "wamp.error.runtime_error"
+	URICanceled               = "wamp.error.canceled"
+	URIProcedureAlreadyExists = "wamp.error.procedure_already_exists"
 )
 
-// FatalAuthReasons are the WAMP close/abort reasons meaning the router
-// rejected the credentials or role. Retrying cannot succeed until the
-// credential or grant changes.
-var FatalAuthReasons = []string{
-	ErrURINotAuthorized,
-	ErrURIAuthorizationFailed,
-	ErrURIAuthenticationFail,
-	ErrURINoAuthMethod,
-}
-
-// IsFatalAuthReason reports whether reason is one of FatalAuthReasons.
+// IsFatalAuthReason reports whether reason, a WAMP close or abort reason,
+// means that the router rejected the credentials or role: URINotAuthorized,
+// URIAuthorizationFailed, URIAuthenticationFailed or URINoAuthMethod.
+// Retrying cannot succeed until the credential or grant changes.
 func IsFatalAuthReason(reason string) bool {
-	for _, r := range FatalAuthReasons {
-		if r == reason {
-			return true
-		}
+	switch reason {
+	case URINotAuthorized, URIAuthorizationFailed, URIAuthenticationFailed, URINoAuthMethod:
+		return true
 	}
 	return false
 }
@@ -158,8 +150,6 @@ type SubscribeOptions struct {
 	// Match is the topic matching policy: "" or "exact" (default), "prefix"
 	// or "wildcard".
 	Match string
-	// GetRetained asks the broker for the topic's retained event, if any.
-	GetRetained bool
 	// Extra holds additional WAMP SUBSCRIBE options, sent as-is.
 	Extra map[string]any
 }
@@ -198,8 +188,6 @@ type PublishOptions struct {
 	// ExcludeMe controls whether the publisher receives its own event when
 	// subscribed. The router default (exclude) applies when nil.
 	ExcludeMe *bool
-	// Retain asks the broker to retain the event for late subscribers.
-	Retain bool
 	// Extra holds additional WAMP PUBLISH options, sent as-is.
 	Extra map[string]any
 }

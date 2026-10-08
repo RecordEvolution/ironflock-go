@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // resolveResult is what sys.appaccess.resolve answers for "weatherstation".
@@ -86,7 +86,7 @@ func newConsumer(t *testing.T, opts ...Option) *consumer {
 func consumerOf(t *testing.T, tf *testFlock) *consumer {
 	t.Helper()
 	c := &consumer{testFlock: tf, resolve: resolveResult(), list: listResult()}
-	c.own.callFn = func(call fakeCall) (*crossbar.Result, error) {
+	c.own.callFn = func(call fakeCall) (*wamp.Result, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		switch call.Procedure {
@@ -134,15 +134,16 @@ func (c *consumer) cached() map[string]*consumedEntry {
 }
 
 // denyAuth makes consumed connections for provider app key appKey (0: all)
-// fail to start with a fatal auth denial, reporting it the way crossbar does.
+// fail to start with a fatal auth denial, reporting it the way
+// wamp.Connection does.
 func denyAuth(appKey int, reason string) func(c *fakeConn) {
 	return func(c *fakeConn) {
-		c.startFn = func(ctx context.Context, cfg crossbar.Config) error {
+		c.startFn = func(ctx context.Context, cfg wamp.Config) error {
 			if appKey != 0 && cfg.AppKey != appKey {
 				return nil
 			}
 			cfg.OnAuthFailure(reason)
-			return &crossbar.AuthError{Realm: crossbar.RealmName(cfg.SwarmKey, cfg.AppKey, cfg.Stage), Reason: reason}
+			return &wamp.AuthError{Realm: wamp.RealmName(cfg.SwarmKey, cfg.AppKey, cfg.Stage), Reason: reason}
 		}
 	}
 }
@@ -181,10 +182,10 @@ func TestConnectToAppResolvesAndOpensASecondConnection(t *testing.T) {
 	if cfg.SwarmKey != 10 || cfg.AppKey != 77 || cfg.Stage != StageDevelopment {
 		t.Errorf("realm %d %d %s", cfg.SwarmKey, cfg.AppKey, cfg.Stage)
 	}
-	if crossbar.RealmName(cfg.SwarmKey, cfg.AppKey, cfg.Stage) != "realm-10-77-dev" {
+	if wamp.RealmName(cfg.SwarmKey, cfg.AppKey, cfg.Stage) != "realm-10-77-dev" {
 		t.Error("wrong realm")
 	}
-	if cfg.URL != crossbar.StudioWSURI || cfg.SerialNumber != "test-serial-123" {
+	if cfg.URL != wamp.StudioWSURI || cfg.SerialNumber != "test-serial-123" {
 		t.Errorf("URL %q serial %q", cfg.URL, cfg.SerialNumber)
 	}
 	if !cfg.FailOnAuthError || cfg.OnAuthFailure == nil {
@@ -265,12 +266,12 @@ func TestConsumedConnectionURLAndCredentials(t *testing.T) {
 	setIdentityEnv(t)
 	t.Setenv("RESWARM_URL", "http://localhost:8086")
 	c := &consumer{testFlock: newTestFlock(t, WithCredentials("app-id", "app-secret")), resolve: resolveResult()}
-	c.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(resolveResult()), nil }
+	c.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(resolveResult()), nil }
 	if _, err := c.ConnectToApp(bg, "weatherstation"); err != nil {
 		t.Fatal(err)
 	}
 	cfg := c.factory.all()[0].config()
-	if cfg.URL != crossbar.LocalhostWSURI {
+	if cfg.URL != wamp.LocalhostWSURI {
 		t.Errorf("URL %q", cfg.URL)
 	}
 	if cfg.AuthID != "app-id" || cfg.AuthSecret != "app-secret" {
@@ -278,7 +279,7 @@ func TestConsumedConnectionURLAndCredentials(t *testing.T) {
 	}
 
 	c2 := &consumer{testFlock: flock(t, WithURL("ws://router/ws"))}
-	c2.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(resolveResult()), nil }
+	c2.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(resolveResult()), nil }
 	if _, err := c2.ConnectToApp(bg, "weatherstation"); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +397,7 @@ func TestConnectToAppSharesConcurrentAttempts(t *testing.T) {
 	c := newConsumer(t)
 	release := make(chan struct{})
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(ctx context.Context, _ crossbar.Config) error {
+		fc.startFn = func(ctx context.Context, _ wamp.Config) error {
 			<-release
 			return nil
 		}
@@ -462,7 +463,7 @@ func TestConnectionErrorsTearDownTheConsumedConnection(t *testing.T) {
 	c := newConsumer(t)
 	boom := errors.New("connection refused")
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(context.Context, crossbar.Config) error { return boom }
+		fc.startFn = func(context.Context, wamp.Config) error { return boom }
 	})
 	_, err := c.ConnectToApp(bg, "weatherstation")
 	if !errors.Is(err, boom) {
@@ -549,7 +550,7 @@ func TestStopAbortsAttemptsInFlight(t *testing.T) {
 	checkGoroutines(t)
 	c := newConsumer(t)
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(ctx context.Context, _ crossbar.Config) error {
+		fc.startFn = func(ctx context.Context, _ wamp.Config) error {
 			<-ctx.Done() // a realm that never appears
 			return ctx.Err()
 		}
@@ -576,7 +577,7 @@ func TestAnAttemptCompletingAfterStopIsClosed(t *testing.T) {
 	c := newConsumer(t)
 	release := make(chan struct{})
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(context.Context, crossbar.Config) error {
+		fc.startFn = func(context.Context, wamp.Config) error {
 			<-release // joins regardless of cancellation
 			return nil
 		}
@@ -593,7 +594,7 @@ func TestAnAttemptCompletingAfterStopIsClosed(t *testing.T) {
 	_ = c.Stop(ctx) // gives up waiting for the attempt
 	close(release)
 
-	if err := <-errc; !errors.Is(err, crossbar.ErrStopped) {
+	if err := <-errc; !errors.Is(err, wamp.ErrStopped) {
 		t.Errorf("err = %v, want ErrStopped", err)
 	}
 	if c.factory.all()[0].stopCount() != 1 {
@@ -606,14 +607,14 @@ func TestFatalAuthDenialWhileOpening(t *testing.T) {
 	for name, setup := range map[string]func(c *fakeConn){
 		"callback and AuthError": denyAuth(0, "wamp.error.not_authorized"),
 		"AuthError only": func(fc *fakeConn) {
-			fc.startFn = func(_ context.Context, cfg crossbar.Config) error {
-				return &crossbar.AuthError{Realm: "realm-10-77-dev", Reason: "wamp.error.authorization_failed"}
+			fc.startFn = func(_ context.Context, cfg wamp.Config) error {
+				return &wamp.AuthError{Realm: "realm-10-77-dev", Reason: "wamp.error.authorization_failed"}
 			}
 		},
 		"callback and another error": func(fc *fakeConn) {
-			fc.startFn = func(_ context.Context, cfg crossbar.Config) error {
+			fc.startFn = func(_ context.Context, cfg wamp.Config) error {
 				cfg.OnAuthFailure("wamp.error.not_authorized")
-				return crossbar.ErrStopped
+				return wamp.ErrStopped
 			}
 		},
 	} {
@@ -661,14 +662,14 @@ func TestGrantRevokedAfterConnecting(t *testing.T) {
 	}
 
 	conn := c.factory.all()[0]
-	go conn.config().OnAuthFailure("wamp.error.not_authorized") // as crossbar does, on its own goroutine
+	go conn.config().OnAuthFailure("wamp.error.not_authorized") // as wamp.Connection does, on its own goroutine
 
 	select {
 	case got := <-errs:
 		if got.Code != CodeNotAuthorized || !strings.Contains(got.Message, "revoked") {
 			t.Errorf("OnError got %v", got)
 		}
-		var aerr *crossbar.AuthError
+		var aerr *wamp.AuthError
 		if !errors.As(got, &aerr) || aerr.Reason != "wamp.error.not_authorized" || aerr.Realm != "realm-10-77-dev" {
 			t.Errorf("cause %#v", got.Err)
 		}
@@ -948,7 +949,7 @@ func TestConsumedAppSubscribeToTable(t *testing.T) {
 	}
 	conn := c.factory.all()[0]
 	var rows []any
-	opts := SubscribeOptions{GetRetained: true}
+	opts := SubscribeOptions{Extra: map[string]any{"custom_option": true}}
 	ts, err := app.SubscribeToTable(bg, "readings", func(ev *Event) { rows = append(rows, ev.Row()["temp"]) }, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1176,7 +1177,7 @@ func TestConnectToAllAppsStopOnError(t *testing.T) {
 	// failure in list order is returned once every open has settled.
 	release := make(chan struct{})
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(_ context.Context, cfg crossbar.Config) error {
+		fc.startFn = func(_ context.Context, cfg wamp.Config) error {
 			if cfg.AppKey == 77 {
 				<-release
 				return errors.New("weatherstation failed")
@@ -1254,7 +1255,7 @@ func TestConnectToAllAppsHonoursTheCallersContext(t *testing.T) {
 	c := newConsumer(t)
 	release := make(chan struct{})
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(context.Context, crossbar.Config) error {
+		fc.startFn = func(context.Context, wamp.Config) error {
 			<-release
 			return nil
 		}

@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"github.com/gammazero/nexus/v3/client"
 	"github.com/gammazero/nexus/v3/router"
 	"github.com/gammazero/nexus/v3/router/auth"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 const (
@@ -65,8 +65,8 @@ type recordingAuth struct {
 	authIDs []string
 }
 
-func (a *recordingAuth) Authenticate(sid wamp.ID, details wamp.Dict, peer wamp.Peer) (*wamp.Welcome, error) {
-	id, _ := wamp.AsString(details["authid"])
+func (a *recordingAuth) Authenticate(sid nxwamp.ID, details nxwamp.Dict, peer nxwamp.Peer) (*nxwamp.Welcome, error) {
+	id, _ := nxwamp.AsString(details["authid"])
 	a.mu.Lock()
 	a.authIDs = append(a.authIDs, id)
 	a.mu.Unlock()
@@ -83,7 +83,7 @@ func (a *recordingAuth) attempts() []string {
 type testAuthorizer struct {
 	mu           sync.Mutex
 	deny         map[string]bool // "publish:<topic>", "subscribe:<topic>", "register:<proc>"
-	registerOpts map[string]wamp.Dict
+	registerOpts map[string]nxwamp.Dict
 }
 
 func (a *testAuthorizer) setDeny(key string, deny bool) {
@@ -92,22 +92,22 @@ func (a *testAuthorizer) setDeny(key string, deny bool) {
 	a.deny[key] = deny
 }
 
-func (a *testAuthorizer) registered(proc string) wamp.Dict {
+func (a *testAuthorizer) registered(proc string) nxwamp.Dict {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.registerOpts[proc]
 }
 
-func (a *testAuthorizer) Authorize(_ *wamp.Session, msg wamp.Message) (bool, error) {
+func (a *testAuthorizer) Authorize(_ *nxwamp.Session, msg nxwamp.Message) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch m := msg.(type) {
-	case *wamp.Publish:
+	case *nxwamp.Publish:
 		return !a.deny["publish:"+string(m.Topic)], nil
-	case *wamp.Subscribe:
+	case *nxwamp.Subscribe:
 		return !a.deny["subscribe:"+string(m.Topic)], nil
-	case *wamp.Register:
-		opts := make(wamp.Dict, len(m.Options))
+	case *nxwamp.Register:
+		opts := make(nxwamp.Dict, len(m.Options))
 		for k, v := range m.Options {
 			opts[k] = v
 		}
@@ -168,7 +168,7 @@ func newTestRouter(t *testing.T, withRealm bool) *testRouter {
 		t:     t,
 		keys:  keys,
 		auth:  &recordingAuth{Authenticator: auth.NewCRAuthenticator(keys, time.Second)},
-		authz: &testAuthorizer{deny: map[string]bool{}, registerOpts: map[string]wamp.Dict{}},
+		authz: &testAuthorizer{deny: map[string]bool{}, registerOpts: map[string]nxwamp.Dict{}},
 	}
 	cfg := &router.Config{}
 	if withRealm {
@@ -373,9 +373,9 @@ func ctxTimeout(t *testing.T, d time.Duration) context.Context {
 }
 
 // localPublish publishes from a trusted local client.
-func localPublish(t *testing.T, cli *client.Client, topic string, args wamp.List, kwargs wamp.Dict) {
+func localPublish(t *testing.T, cli *client.Client, topic string, args nxwamp.List, kwargs nxwamp.Dict) {
 	t.Helper()
-	if err := cli.Publish(topic, wamp.Dict{wamp.OptAcknowledge: true}, args, kwargs); err != nil {
+	if err := cli.Publish(topic, nxwamp.Dict{nxwamp.OptAcknowledge: true}, args, kwargs); err != nil {
 		t.Fatalf("publish %s: %v", topic, err)
 	}
 }
@@ -404,8 +404,8 @@ func interestingGoroutines() map[string]string {
 		for _, line := range strings.Split(g, "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "github.com/gammazero/nexus/") ||
-				(strings.HasPrefix(line, "github.com/RecordEvolution/ironflock-go/crossbar.") &&
-					!strings.Contains(line, "crossbar.Test") && !strings.Contains(line, "_test.go")) {
+				(strings.HasPrefix(line, "github.com/RecordEvolution/ironflock-go/wamp.") &&
+					!strings.Contains(line, "wamp.Test") && !strings.Contains(line, "_test.go")) {
 				relevant = true
 			}
 		}

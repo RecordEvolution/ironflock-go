@@ -41,32 +41,32 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
 	"github.com/RecordEvolution/ironflock-go/filestore"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // Aliases of the connection-level types, so most apps need only this package.
 type (
-	Event             = crossbar.Event
-	EventHandler      = crossbar.EventHandler
-	Invocation        = crossbar.Invocation
-	InvocationHandler = crossbar.InvocationHandler
-	Result            = crossbar.Result
-	WampError         = crossbar.WampError
-	SubscribeOptions  = crossbar.SubscribeOptions
-	RegisterOptions   = crossbar.RegisterOptions
-	CallOptions       = crossbar.CallOptions
-	Subscription      = crossbar.Subscription
-	Registration      = crossbar.Registration
-	Stage             = crossbar.Stage
+	Event             = wamp.Event
+	EventHandler      = wamp.EventHandler
+	Invocation        = wamp.Invocation
+	InvocationHandler = wamp.InvocationHandler
+	Result            = wamp.Result
+	WampError         = wamp.Error
+	SubscribeOptions  = wamp.SubscribeOptions
+	RegisterOptions   = wamp.RegisterOptions
+	CallOptions       = wamp.CallOptions
+	Subscription      = wamp.Subscription
+	Registration      = wamp.Registration
+	Stage             = wamp.Stage
 	FileStore         = filestore.FileStore
 	FileStoreError    = filestore.Error
 )
 
 // Stages.
 const (
-	StageDevelopment = crossbar.StageDevelopment
-	StageProduction  = crossbar.StageProduction
+	StageDevelopment = wamp.StageDevelopment
+	StageProduction  = wamp.StageProduction
 )
 
 // ErrorLogsTable is the per-data-backend error table ReportError writes to.
@@ -160,20 +160,20 @@ func WithReconnectWindow(d time.Duration) Option {
 // WithLogger sets the logger (default slog.Default()).
 func WithLogger(l *slog.Logger) Option { return func(c *config) { c.logger = l } }
 
-// wampConn is the connection surface the SDK uses; *crossbar.Connection
+// wampConn is the connection surface the SDK uses; *wamp.Connection
 // implements it. Tests substitute a fake.
 type wampConn interface {
-	Configure(cfg crossbar.Config) error
+	Configure(cfg wamp.Config) error
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	IsOpen() bool
 	URL() string
-	Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *crossbar.CallOptions, retryWindow time.Duration) (*crossbar.Result, error)
-	Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *crossbar.PublishOptions, waitWindow time.Duration) error
-	Subscribe(ctx context.Context, topic string, handler crossbar.EventHandler, opts *crossbar.SubscribeOptions) (*crossbar.Subscription, error)
-	Unsubscribe(ctx context.Context, sub *crossbar.Subscription) error
-	Register(ctx context.Context, procedure string, handler crossbar.InvocationHandler, opts *crossbar.RegisterOptions) (*crossbar.Registration, error)
-	Unregister(ctx context.Context, reg *crossbar.Registration) error
+	Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retryWindow time.Duration) (*wamp.Result, error)
+	Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *wamp.PublishOptions, waitWindow time.Duration) error
+	Subscribe(ctx context.Context, topic string, handler wamp.EventHandler, opts *wamp.SubscribeOptions) (*wamp.Subscription, error)
+	Unsubscribe(ctx context.Context, sub *wamp.Subscription) error
+	Register(ctx context.Context, procedure string, handler wamp.InvocationHandler, opts *wamp.RegisterOptions) (*wamp.Registration, error)
+	Unregister(ctx context.Context, reg *wamp.Registration) error
 }
 
 // IronFlock is a connection to the IronFlock platform for one app on one
@@ -224,7 +224,7 @@ type IronFlock struct {
 // number is available; other missing variables are logged as a warning and
 // fail the operations that need them.
 func New(opts ...Option) (*IronFlock, error) {
-	return newWithConn(crossbar.NewConnection(), func() wampConn { return crossbar.NewConnection() }, opts...)
+	return newWithConn(wamp.NewConnection(), func() wampConn { return wamp.NewConnection() }, opts...)
 }
 
 // newWithConn is New with the own connection and the factory of consumed-app
@@ -241,7 +241,7 @@ func newWithConn(conn wampConn, newConn func() wampConn, opts ...Option) (*IronF
 		log = slog.Default()
 	}
 
-	serial, err := crossbar.SerialNumber(c.serialNumber)
+	serial, err := wamp.SerialNumber(c.serialNumber)
 	if err != nil {
 		return nil, missingConfigf("%v", err)
 	}
@@ -257,7 +257,7 @@ func newWithConn(conn wampConn, newConn func() wampConn, opts ...Option) (*IronF
 		appName:         stringSetting(c.appName, "APP_NAME"),
 		swarmKey:        keySetting(log, c.swarmKey, "SWARM_KEY"),
 		appKey:          keySetting(log, c.appKey, "APP_KEY"),
-		stage:           crossbar.StageFromEnv(stringSetting(c.env, "ENV")),
+		stage:           wamp.StageFromEnv(stringSetting(c.env, "ENV")),
 		reswarmURL:      c.reswarmURL,
 		url:             c.url,
 		authID:          c.authID,
@@ -319,15 +319,17 @@ func keySetting(log *slog.Logger, opt *int, name string) int {
 }
 
 // Connection returns the underlying connection, for advanced use.
-func (f *IronFlock) Connection() *crossbar.Connection {
-	c, _ := f.conn.(*crossbar.Connection)
+func (f *IronFlock) Connection() *wamp.Connection {
+	c, _ := f.conn.(*wamp.Connection)
 	return c
 }
 
 // IsConnected reports whether the connection to the platform is established.
 func (f *IronFlock) IsConnected() bool { return f.conn.IsOpen() }
 
-// Stage returns the stage of the realm the app joins.
+// Stage returns the stage of the realm the app joins: StageDevelopment
+// ("DEV") or StageProduction ("PROD"). The cross-app API names stages in
+// lower case ("dev", "prod"; see Stage.Lower).
 func (f *IronFlock) Stage() Stage { return f.stage }
 
 // SerialNumber returns the device serial number.
@@ -378,7 +380,7 @@ func (f *IronFlock) Start(ctx context.Context) error {
 	switch {
 	case f.stopped:
 		f.mu.Unlock()
-		return fmt.Errorf("ironflock: Start after Stop: %w", crossbar.ErrStopped)
+		return fmt.Errorf("ironflock: Start after Stop: %w", wamp.ErrStopped)
 	case f.started:
 		f.mu.Unlock()
 		return errors.New("ironflock: Start called while already started")
@@ -387,7 +389,7 @@ func (f *IronFlock) Start(ctx context.Context) error {
 	if !f.configured {
 		url, err := f.routerURL()
 		if err == nil {
-			err = f.conn.Configure(crossbar.Config{
+			err = f.conn.Configure(wamp.Config{
 				SwarmKey:     f.swarmKey,
 				AppKey:       f.appKey,
 				Stage:        f.stage,
@@ -423,7 +425,7 @@ func (f *IronFlock) routerURL() (string, error) {
 	if f.url != "" {
 		return f.url, nil
 	}
-	return crossbar.WebSocketURI(f.reswarmURL)
+	return wamp.WebSocketURI(f.reswarmURL)
 }
 
 // Stop closes every consumed-app connection and the connection itself. It
@@ -431,7 +433,7 @@ func (f *IronFlock) routerURL() (string, error) {
 //
 // Consumed-app connections still opening are aborted. Afterwards
 // operations fail, and ConnectToApp returns an error wrapping
-// crossbar.ErrStopped.
+// wamp.ErrStopped.
 func (f *IronFlock) Stop(ctx context.Context) error {
 	f.mu.Lock()
 	if f.stopDone != nil {

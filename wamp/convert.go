@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // normalizeValue converts a decoded WAMP payload value into the JSON-like Go
@@ -17,9 +17,9 @@ import (
 // above math.MaxInt64), float64, []byte, []any and map[string]any, applied
 // recursively.
 //
-// The msgpack decoder produces integers of several widths and the wamp.List /
-// wamp.Dict named types, which defeat type assertions such as
-// v.(map[string]any); everything a handler sees goes through here.
+// The msgpack decoder produces integers of several widths and the
+// nxwamp.List / nxwamp.Dict named types, which defeat type assertions such
+// as v.(map[string]any); everything a handler sees goes through here.
 func normalizeValue(v any) any {
 	switch x := v.(type) {
 	case nil:
@@ -48,11 +48,11 @@ func normalizeValue(v any) any {
 		return normalizeUint(x)
 	case float32:
 		return float64(x)
-	case wamp.List:
+	case nxwamp.List:
 		return normalizeList(x)
 	case []any:
 		return normalizeList(x)
-	case wamp.Dict:
+	case nxwamp.Dict:
 		return normalizeDict(x)
 	case map[string]any:
 		return normalizeDict(x)
@@ -167,22 +167,22 @@ func normalizeDict(m map[string]any) map[string]any {
 	return out
 }
 
-// newWampError converts a WAMP ERROR message into a *WampError.
-func newWampError(e *wamp.Error) *WampError {
-	return &WampError{
+// newError converts a WAMP ERROR message into an *Error.
+func newError(e *nxwamp.Error) *Error {
+	return &Error{
 		URI:    string(e.Error),
 		Args:   normalizeList(e.Arguments),
 		Kwargs: normalizeDict(e.ArgumentsKw),
 	}
 }
 
-// parseWampError recovers the router's refusal from the error text nexus
+// parseRefusal recovers the router's refusal from the error text nexus
 // produces for SUBSCRIBE, REGISTER, PUBLISH (acknowledged), UNSUBSCRIBE and
 // UNREGISTER, which — unlike a CALL error — it does not return typed: the
 // text is "<prefix><uri>[: <args>][: <kwargs>]". The URI is exact; the rest
 // (nexus joins arguments with ", ") is kept as the single string argument.
 // It returns nil when text is not such an error.
-func parseWampError(text, prefix string) *WampError {
+func parseRefusal(text, prefix string) *Error {
 	rest, ok := strings.CutPrefix(text, prefix)
 	if !ok {
 		return nil
@@ -191,7 +191,7 @@ func parseWampError(text, prefix string) *WampError {
 	if !looksLikeURI(uri) {
 		return nil
 	}
-	werr := &WampError{URI: uri}
+	werr := &Error{URI: uri}
 	if detail != "" {
 		werr.Args = []any{detail}
 	}
@@ -207,13 +207,13 @@ func looksLikeURI(s string) bool {
 
 // validateURI rejects topics and procedures the router could never accept
 // and that are almost certainly a programming error: empty, or with leading
-// or trailing whitespace (the Python SDK's CrossbarCallParams rule).
+// or trailing whitespace (the Python SDK's topic rule for low-level calls).
 func validateURI(kind, uri string) error {
 	if uri == "" {
-		return fmt.Errorf("crossbar: %s must be a non-empty string", kind)
+		return fmt.Errorf("wamp: %s must be a non-empty string", kind)
 	}
 	if strings.TrimSpace(uri) != uri {
-		return fmt.Errorf("crossbar: %s %q must not have leading or trailing whitespace", kind, uri)
+		return fmt.Errorf("wamp: %s %q must not have leading or trailing whitespace", kind, uri)
 	}
 	return nil
 }
@@ -222,21 +222,21 @@ func validateURI(kind, uri string) error {
 // explicit option or, failing that, of a "match" entry in extra.
 func matchPolicy(match string, extra map[string]any) (string, error) {
 	if match == "" {
-		if s, ok := extra[wamp.OptMatch].(string); ok {
+		if s, ok := extra[nxwamp.OptMatch].(string); ok {
 			match = s
 		}
 	}
 	switch match {
-	case "", wamp.MatchExact:
+	case "", nxwamp.MatchExact:
 		return "", nil
-	case wamp.MatchPrefix, wamp.MatchWildcard:
+	case nxwamp.MatchPrefix, nxwamp.MatchWildcard:
 		return match, nil
 	}
-	return "", fmt.Errorf("crossbar: invalid match policy %q (want \"exact\", \"prefix\" or \"wildcard\")", match)
+	return "", fmt.Errorf("wamp: invalid match policy %q (want \"exact\", \"prefix\" or \"wildcard\")", match)
 }
 
-func cloneDict(m map[string]any) wamp.Dict {
-	d := make(wamp.Dict, len(m)+3)
+func cloneDict(m map[string]any) nxwamp.Dict {
+	d := make(nxwamp.Dict, len(m)+3)
 	for k, v := range m {
 		d[k] = v
 	}
@@ -245,34 +245,31 @@ func cloneDict(m map[string]any) wamp.Dict {
 
 // subscribeOptions builds the WAMP SUBSCRIBE options. Explicit fields win
 // over Extra; the caller's options are never modified.
-func subscribeOptions(o *SubscribeOptions, match string) wamp.Dict {
+func subscribeOptions(o *SubscribeOptions, match string) nxwamp.Dict {
 	if o == nil {
-		return wamp.Dict{}
+		return nxwamp.Dict{}
 	}
 	d := cloneDict(o.Extra)
-	delete(d, wamp.OptMatch)
+	delete(d, nxwamp.OptMatch)
 	if match != "" {
-		d[wamp.OptMatch] = match
-	}
-	if o.GetRetained {
-		d["get_retained"] = true
+		d[nxwamp.OptMatch] = match
 	}
 	return d
 }
 
 // registerOptions builds the WAMP REGISTER options. force_reregister
 // defaults to true unless ForceReregister (or Extra) sets it explicitly.
-func registerOptions(o *RegisterOptions, match string) wamp.Dict {
+func registerOptions(o *RegisterOptions, match string) nxwamp.Dict {
 	if o == nil {
-		return wamp.Dict{"force_reregister": true}
+		return nxwamp.Dict{"force_reregister": true}
 	}
 	d := cloneDict(o.Extra)
-	delete(d, wamp.OptMatch)
+	delete(d, nxwamp.OptMatch)
 	if match != "" {
-		d[wamp.OptMatch] = match
+		d[nxwamp.OptMatch] = match
 	}
 	if o.Invoke != "" {
-		d[wamp.OptInvoke] = o.Invoke
+		d[nxwamp.OptInvoke] = o.Invoke
 	}
 	switch {
 	case o.ForceReregister != nil:
@@ -286,9 +283,9 @@ func registerOptions(o *RegisterOptions, match string) wamp.Dict {
 }
 
 // callOptions builds the WAMP CALL options.
-func callOptions(o *CallOptions) wamp.Dict {
+func callOptions(o *CallOptions) nxwamp.Dict {
 	if o == nil {
-		return wamp.Dict{}
+		return nxwamp.Dict{}
 	}
 	d := cloneDict(o.Extra)
 	if o.Timeout > 0 {
@@ -296,28 +293,25 @@ func callOptions(o *CallOptions) wamp.Dict {
 		if ms == 0 {
 			ms = 1
 		}
-		d[wamp.OptTimeout] = ms
+		d[nxwamp.OptTimeout] = ms
 	}
 	if o.DiscloseMe {
-		d[wamp.OptDiscloseMe] = true
+		d[nxwamp.OptDiscloseMe] = true
 	}
 	return d
 }
 
 // publishOptions builds the WAMP PUBLISH options.
-func publishOptions(o *PublishOptions) wamp.Dict {
+func publishOptions(o *PublishOptions) nxwamp.Dict {
 	if o == nil {
-		return wamp.Dict{}
+		return nxwamp.Dict{}
 	}
 	d := cloneDict(o.Extra)
 	if o.Acknowledge {
-		d[wamp.OptAcknowledge] = true
+		d[nxwamp.OptAcknowledge] = true
 	}
 	if o.ExcludeMe != nil {
-		d[wamp.OptExcludeMe] = *o.ExcludeMe
-	}
-	if o.Retain {
-		d["retain"] = true
+		d[nxwamp.OptExcludeMe] = *o.ExcludeMe
 	}
 	return d
 }
@@ -328,13 +322,14 @@ func formatSeconds(d time.Duration) string {
 	return strconv.FormatFloat(d.Seconds(), 'g', -1, 64)
 }
 
-// wireArgs returns the positional arguments of an outgoing message. nexus
-// encodes a nil Arguments field that precedes a non-empty ArgumentsKw as nil
-// instead of an empty list; Crossbar rejects such a message as a protocol
-// violation and closes the session. Send [] instead, as autobahn does.
-func wireArgs(args []any, kwargs map[string]any) wamp.List {
+// wireArgs returns the positional arguments of an outgoing message. WAMP
+// requires Arguments to be a list when ArgumentsKw follows; a router may
+// abort the session otherwise. nexus encodes a nil Arguments field followed
+// by a non-empty ArgumentsKw as nil, not as an empty list, so wireArgs
+// returns [] in that case, as autobahn sends it.
+func wireArgs(args []any, kwargs map[string]any) nxwamp.List {
 	if args == nil && len(kwargs) > 0 {
-		return wamp.List{}
+		return nxwamp.List{}
 	}
-	return wamp.List(args)
+	return nxwamp.List(args)
 }

@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 type namedInt int
@@ -42,8 +42,8 @@ func TestNormalizeValue(t *testing.T) {
 		{"named int", namedInt(3), int64(3)},
 		{"named string", namedString("x"), "x"},
 		{"time", ts, ts},
-		{"wamp.List", wamp.List{1, "a"}, []any{int64(1), "a"}},
-		{"wamp.Dict", wamp.Dict{"a": uint16(1)}, map[string]any{"a": int64(1)}},
+		{"nxwamp.List", nxwamp.List{1, "a"}, []any{int64(1), "a"}},
+		{"nxwamp.Dict", nxwamp.Dict{"a": uint16(1)}, map[string]any{"a": int64(1)}},
 		{"map any any", map[any]any{"k": 1, 2: "two"}, map[string]any{"k": int64(1), "2": "two"}},
 		{"typed slice", []int{1, 2}, []any{int64(1), int64(2)}},
 		{"typed map", map[string]int{"a": 1}, map[string]any{"a": int64(1)}},
@@ -53,9 +53,9 @@ func TestNormalizeValue(t *testing.T) {
 		{"nil typed slice", []int(nil), nil},
 		{
 			"nested",
-			wamp.Dict{
-				"list": wamp.List{int8(1), wamp.Dict{"x": uint32(2)}, nil, []byte("b")},
-				"map":  map[string]any{"inner": wamp.List{float32(0.5), true}},
+			nxwamp.Dict{
+				"list": nxwamp.List{int8(1), nxwamp.Dict{"x": uint32(2)}, nil, []byte("b")},
+				"map":  map[string]any{"inner": nxwamp.List{float32(0.5), true}},
 			},
 			map[string]any{
 				"list": []any{int64(1), map[string]any{"x": int64(2)}, nil, []byte("b")},
@@ -80,42 +80,42 @@ func TestNormalizeListAndDictKeepNil(t *testing.T) {
 	if got := normalizeDict(nil); got != nil {
 		t.Fatalf("normalizeDict(nil) = %#v", got)
 	}
-	in := wamp.Dict{"a": wamp.List{1}}
+	in := nxwamp.Dict{"a": nxwamp.List{1}}
 	out := normalizeDict(in)
 	if _, ok := out["a"].([]any); !ok {
-		t.Fatalf("nested wamp.List not converted: %T", out["a"])
+		t.Fatalf("nested nxwamp.List not converted: %T", out["a"])
 	}
 	// The input is not modified.
-	if _, ok := in["a"].(wamp.List); !ok {
+	if _, ok := in["a"].(nxwamp.List); !ok {
 		t.Fatalf("input modified: %T", in["a"])
 	}
 }
 
-func TestParseWampError(t *testing.T) {
+func TestParseRefusal(t *testing.T) {
 	tests := []struct {
 		name, text, prefix string
-		want               *WampError
+		want               *Error
 	}{
 		{
 			"bare uri", "subscribing to topic 'a.b': wamp.error.not_authorized", subscribePrefix("a.b"),
-			&WampError{URI: "wamp.error.not_authorized"},
+			&Error{URI: "wamp.error.not_authorized"},
 		},
 		{
 			"uri with args", "waiting for published message: wamp.error.not_authorized: denied, really", publishPrefix,
-			&WampError{URI: "wamp.error.not_authorized", Args: []any{"denied, really"}},
+			&Error{URI: "wamp.error.not_authorized", Args: []any{"denied, really"}},
 		},
 		{
 			"register", "registering procedure 'p': wamp.error.procedure_already_exists", registerPrefix("p"),
-			&WampError{URI: "wamp.error.procedure_already_exists"},
+			&Error{URI: "wamp.error.procedure_already_exists"},
 		},
 		{"other prefix", "timeout waiting for reply", publishPrefix, nil},
 		{"not a uri", "waiting for published message: not a uri", publishPrefix, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseWampError(tt.text, tt.prefix)
+			got := parseRefusal(tt.text, tt.prefix)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("parseWampError(%q) = %#v, want %#v", tt.text, got, tt.want)
+				t.Fatalf("parseRefusal(%q) = %#v, want %#v", tt.text, got, tt.want)
 			}
 		})
 	}
@@ -124,9 +124,9 @@ func TestParseWampError(t *testing.T) {
 func TestRequestErrorAndCallError(t *testing.T) {
 	c := NewConnection()
 	werr := c.requestError("publish", publishPrefix, errors.New("waiting for published message: wamp.error.not_authorized"))
-	var w *WampError
-	if !errors.As(werr, &w) || w.URI != ErrURINotAuthorized {
-		t.Fatalf("requestError = %v, want *WampError not_authorized", werr)
+	var w *Error
+	if !errors.As(werr, &w) || w.URI != URINotAuthorized {
+		t.Fatalf("requestError = %v, want *Error not_authorized", werr)
 	}
 
 	lost := c.requestError("publish", publishPrefix, client.ErrNotConn)
@@ -134,16 +134,16 @@ func TestRequestErrorAndCallError(t *testing.T) {
 		t.Fatalf("requestError(ErrNotConn) = %v, want ErrNotConnected", lost)
 	}
 
-	rpc := client.RPCError{Procedure: "p", Err: &wamp.Error{
+	rpc := client.RPCError{Procedure: "p", Err: &nxwamp.Error{
 		Error:       "app.error.bad",
-		Arguments:   wamp.List{uint8(1), wamp.Dict{"k": int32(2)}},
-		ArgumentsKw: wamp.Dict{"n": uint64(3)},
+		Arguments:   nxwamp.List{uint8(1), nxwamp.Dict{"k": int32(2)}},
+		ArgumentsKw: nxwamp.Dict{"n": uint64(3)},
 	}}
 	err := c.callError("p", rpc)
 	if !errors.As(err, &w) {
-		t.Fatalf("callError = %T %v, want *WampError", err, err)
+		t.Fatalf("callError = %T %v, want *Error", err, err)
 	}
-	want := &WampError{URI: "app.error.bad", Args: []any{int64(1), map[string]any{"k": int64(2)}},
+	want := &Error{URI: "app.error.bad", Args: []any{int64(1), map[string]any{"k": int64(2)}},
 		Kwargs: map[string]any{"n": int64(3)}}
 	if !reflect.DeepEqual(w, want) {
 		t.Fatalf("callError = %#v, want %#v", w, want)
@@ -155,12 +155,12 @@ func TestRequestErrorAndCallError(t *testing.T) {
 
 func TestOptionBuilders(t *testing.T) {
 	t.Run("register defaults force_reregister", func(t *testing.T) {
-		if got := registerOptions(nil, ""); !reflect.DeepEqual(got, wamp.Dict{"force_reregister": true}) {
+		if got := registerOptions(nil, ""); !reflect.DeepEqual(got, nxwamp.Dict{"force_reregister": true}) {
 			t.Fatalf("got %v", got)
 		}
 		opts := &RegisterOptions{Invoke: "single", Extra: map[string]any{"x": 1}}
 		got := registerOptions(opts, "prefix")
-		want := wamp.Dict{"force_reregister": true, "invoke": "single", "match": "prefix", "x": 1}
+		want := nxwamp.Dict{"force_reregister": true, "invoke": "single", "match": "prefix", "x": 1}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
@@ -184,26 +184,50 @@ func TestOptionBuilders(t *testing.T) {
 			t.Fatalf("default call options must be empty (no disclose_me), got %v", got)
 		}
 		got := callOptions(&CallOptions{Timeout: 1500 * time.Millisecond, DiscloseMe: true, Extra: map[string]any{"a": 1}})
-		want := wamp.Dict{"timeout": int64(1500), "disclose_me": true, "a": 1}
+		want := nxwamp.Dict{"timeout": int64(1500), "disclose_me": true, "a": 1}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
 	t.Run("publish", func(t *testing.T) {
 		f := false
-		got := publishOptions(&PublishOptions{Acknowledge: true, ExcludeMe: &f, Retain: true})
-		want := wamp.Dict{"acknowledge": true, "exclude_me": false, "retain": true}
+		opts := &PublishOptions{Acknowledge: true, ExcludeMe: &f, Extra: map[string]any{"eligible": []any{int64(7)}}}
+		got := publishOptions(opts)
+		want := nxwamp.Dict{"acknowledge": true, "exclude_me": false, "eligible": []any{int64(7)}}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
+		}
+		if len(opts.Extra) != 1 {
+			t.Fatalf("caller's options modified: %+v", opts)
 		}
 		if got := publishOptions(&PublishOptions{}); len(got) != 0 {
 			t.Fatalf("exclude_me must be omitted when nil, got %v", got)
 		}
 	})
 	t.Run("subscribe", func(t *testing.T) {
-		got := subscribeOptions(&SubscribeOptions{Match: "exact", GetRetained: true}, "")
-		if !reflect.DeepEqual(got, wamp.Dict{"get_retained": true}) {
+		if got := subscribeOptions(nil, ""); len(got) != 0 {
+			t.Fatalf("default subscribe options must be empty, got %v", got)
+		}
+		build := func(o *SubscribeOptions) nxwamp.Dict { // as Subscribe does
+			t.Helper()
+			match, err := matchPolicy(o.Match, o.Extra)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return subscribeOptions(o, match)
+		}
+		// Extra options pass through as they are; an explicit Match wins over
+		// Extra's.
+		explicit := &SubscribeOptions{Match: "exact", Extra: map[string]any{"match": "prefix", "custom": "x"}}
+		if got := build(explicit); !reflect.DeepEqual(got, nxwamp.Dict{"custom": "x"}) {
 			t.Fatalf("got %v", got)
+		}
+		fromExtra := &SubscribeOptions{Extra: map[string]any{"match": "prefix", "custom": "x"}}
+		if got := build(fromExtra); !reflect.DeepEqual(got, nxwamp.Dict{"match": "prefix", "custom": "x"}) {
+			t.Fatalf("got %v", got)
+		}
+		if len(explicit.Extra) != 2 || explicit.Extra["match"] != "prefix" {
+			t.Fatalf("caller's options modified: %+v", explicit)
 		}
 	})
 	t.Run("match policy", func(t *testing.T) {
@@ -229,17 +253,17 @@ func TestInvokeResult(t *testing.T) {
 		want  client.InvokeResult
 	}{
 		{"nil", nil, nil, client.InvokeResult{}},
-		{"value", 42, nil, client.InvokeResult{Args: wamp.List{42}}},
+		{"value", 42, nil, client.InvokeResult{Args: nxwamp.List{42}}},
 		{"Result", Result{Args: []any{1}, Kwargs: map[string]any{"k": 2}},
-			nil, client.InvokeResult{Args: wamp.List{1}, Kwargs: wamp.Dict{"k": 2}}},
-		{"*Result", &Result{Args: []any{"a"}}, nil, client.InvokeResult{Args: wamp.List{"a"}}},
+			nil, client.InvokeResult{Args: nxwamp.List{1}, Kwargs: nxwamp.Dict{"k": 2}}},
+		{"*Result", &Result{Args: []any{"a"}}, nil, client.InvokeResult{Args: nxwamp.List{"a"}}},
 		{"nil *Result", (*Result)(nil), nil, client.InvokeResult{}},
-		{"WampError", nil, &WampError{URI: "app.error.x", Args: []any{1}, Kwargs: map[string]any{"a": 1}},
-			client.InvokeResult{Err: "app.error.x", Args: wamp.List{1}, Kwargs: wamp.Dict{"a": 1}}},
-		{"wrapped WampError", nil, errors.Join(errors.New("ctx"), &WampError{URI: "app.error.y"}),
+		{"*Error", nil, &Error{URI: "app.error.x", Args: []any{1}, Kwargs: map[string]any{"a": 1}},
+			client.InvokeResult{Err: "app.error.x", Args: nxwamp.List{1}, Kwargs: nxwamp.Dict{"a": 1}}},
+		{"wrapped *Error", nil, errors.Join(errors.New("ctx"), &Error{URI: "app.error.y"}),
 			client.InvokeResult{Err: "app.error.y"}},
 		{"plain error", "ignored", errors.New("boom"),
-			client.InvokeResult{Err: ErrURIRuntimeError, Args: wamp.List{"boom"}}},
+			client.InvokeResult{Err: URIRuntimeError, Args: nxwamp.List{"boom"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -268,6 +292,24 @@ func TestFormatSecondsAndErrors(t *testing.T) {
 	err = &connectTimeoutError{realm: "realm-1-2-dev", timeout: DefaultFirstConnectTimeout}
 	if err.Error() != "failed to connect to realm realm-1-2-dev within 50s" || !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("connectTimeoutError = %q", err)
+	}
+}
+
+func TestIsFatalAuthReason(t *testing.T) {
+	for reason, want := range map[string]bool{
+		URINotAuthorized:                   true,
+		URIAuthorizationFailed:             true,
+		URIAuthenticationFailed:            true,
+		URINoAuthMethod:                    true,
+		URINoSuchRealm:                     false,
+		reasonTransportLost:                false,
+		string(nxwamp.CloseRealm):          false,
+		string(nxwamp.CloseSystemShutdown): false,
+		"":                                 false,
+	} {
+		if got := IsFatalAuthReason(reason); got != want {
+			t.Errorf("IsFatalAuthReason(%q) = %v, want %v", reason, got, want)
+		}
 	}
 }
 

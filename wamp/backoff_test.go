@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"sync"
@@ -54,19 +54,19 @@ func TestBackoffNoSuchRealmStreak(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	b := newTestBackoff(clock)
 
-	if b.observe(ErrURINoSuchRealm) { // streak starts
+	if b.observe(URINoSuchRealm) { // streak starts
 		t.Fatal("slowed on first refusal")
 	}
 	clock.advance(30 * time.Second)
-	if b.observe(ErrURINoSuchRealm) || b.maxDelay() != BaseMaxRetryDelay {
+	if b.observe(URINoSuchRealm) || b.maxDelay() != BaseMaxRetryDelay {
 		t.Fatal("slowed before 60s")
 	}
 	clock.advance(30 * time.Second) // exactly 60s
-	if !b.observe(ErrURINoSuchRealm) || b.maxDelay() != NoSuchRealmMaxRetryDelay {
+	if !b.observe(URINoSuchRealm) || b.maxDelay() != NoSuchRealmMaxRetryDelay {
 		t.Fatal("not slowed at 60s")
 	}
 	clock.advance(600 * time.Second)
-	if b.observe(ErrURINoSuchRealm) {
+	if b.observe(URINoSuchRealm) {
 		t.Fatal("slow-down reported twice")
 	}
 	if b.maxDelay() != NoSuchRealmMaxRetryDelay {
@@ -91,24 +91,24 @@ func TestBackoffNoSuchRealmStreak(t *testing.T) {
 	if b.maxDelay() != BaseMaxRetryDelay || b.next() != BaseMaxRetryDelay {
 		t.Fatal("other close reason did not reset the cap")
 	}
-	b.observe(ErrURINoSuchRealm)
+	b.observe(URINoSuchRealm)
 	clock.advance(30 * time.Second)
-	if b.observe(ErrURINoSuchRealm) {
+	if b.observe(URINoSuchRealm) {
 		t.Fatal("new streak inherited the old one")
 	}
 
 	// So does a join.
 	clock.advance(60 * time.Second)
-	if !b.observe(ErrURINoSuchRealm) {
+	if !b.observe(URINoSuchRealm) {
 		t.Fatal("not slowed")
 	}
 	b.joined()
 	if b.maxDelay() != BaseMaxRetryDelay || b.next() != time.Second {
 		t.Fatal("join did not reset the policy")
 	}
-	b.observe(ErrURINoSuchRealm)
+	b.observe(URINoSuchRealm)
 	clock.advance(5 * time.Second)
-	if b.observe(ErrURINoSuchRealm) {
+	if b.observe(URINoSuchRealm) {
 		t.Fatal("slowed right after a join")
 	}
 }

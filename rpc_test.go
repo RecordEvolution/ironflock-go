@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 func TestCallSendsArgumentsWithoutMetadata(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf("call-result"), nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf("call-result"), nil }
 	res, err := f.Call(bg, "some.full.topic", 1, 2, Kwargs{"scale": 10}, CallOptions{DiscloseMe: true})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestCallValidationAndErrors(t *testing.T) {
 		t.Fatal("an invalid call reached the connection")
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr("wamp.error.runtime_error", "boom") }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr("wamp.error.runtime_error", "boom") }
 	_, err = f.Call(bg, "test.procedure")
 	if want := `Call of procedure 'test.procedure' failed with WAMP error 'wamp.error.runtime_error' — ["boom"]`; err == nil || err.Error() != want {
 		t.Errorf("error %v\nwant %q", err, want)
@@ -63,7 +63,7 @@ func TestCallValidationAndErrors(t *testing.T) {
 		t.Errorf("WampError not reachable: %v", err)
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) {
 		return nil, errors.New("Not connected to the IronFlock router")
 	}
 	_, err = f.Call(bg, "test.procedure")
@@ -143,7 +143,7 @@ func TestRegisterDeviceFunction(t *testing.T) {
 		t.Errorf("Unregister(nil): %v", err)
 	}
 
-	f.own.registerFn = func(string) error { return wampErr(crossbar.ErrURIProcedureExists) }
+	f.own.registerFn = func(string) error { return wampErr(wamp.URIProcedureAlreadyExists) }
 	_, err = f.RegisterDeviceFunction(bg, "taken", handler)
 	if want := "Registration of procedure '10.12.20.DEV.taken' failed with WAMP error 'wamp.error.procedure_already_exists'"; err == nil || err.Error() != want {
 		t.Errorf("error %v", err)
@@ -155,7 +155,7 @@ func TestRegisterDeviceFunction(t *testing.T) {
 
 func TestCallDeviceFunctionErrorsNameTheDevice(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr(crossbar.ErrURINoSuchProcedure) }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URINoSuchProcedure) }
 	_, err := f.CallDeviceFunction(bg, 42, "my.procedure")
 	want := "Call of procedure 'my.procedure' on device '42' (full WAMP topic '10.42.20.DEV.my.procedure') failed with WAMP error 'wamp.error.no_such_procedure'"
 	if err == nil || err.Error() != want {
@@ -294,7 +294,7 @@ func TestSetDeviceLocation(t *testing.T) {
 		}
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr(crossbar.ErrURINoSuchProcedure) }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URINoSuchProcedure) }
 	_, err := f.SetDeviceLocation(bg, 1, 2)
 	if want := "Device location update failed with WAMP error 'wamp.error.no_such_procedure'"; err == nil || err.Error() != want {
 		t.Errorf("error %v", err)

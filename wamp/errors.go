@@ -1,4 +1,4 @@
-package crossbar
+package wamp
 
 import (
 	"context"
@@ -36,7 +36,7 @@ func (e *connectTimeoutError) Error() string {
 func (e *connectTimeoutError) Unwrap() error { return ErrNotConnected }
 
 // errAlreadyStarted is returned by a second Start.
-var errAlreadyStarted = errors.New("crossbar: connection already started")
+var errAlreadyStarted = errors.New("wamp: connection already started")
 
 // stoppedErrLocked is the error of an operation on a stopped connection:
 // ErrStopped, joined with the *AuthError when a fatal auth denial stopped
@@ -61,21 +61,21 @@ func (c *Connection) opError(op string, err error) error {
 		if c.stopFlag.Load() {
 			return c.stoppedErr()
 		}
-		return fmt.Errorf("crossbar: %s: session lost: %w", op, ErrNotConnected)
+		return fmt.Errorf("wamp: %s: session lost: %w", op, ErrNotConnected)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	}
-	return fmt.Errorf("crossbar: %s: %w", op, err)
+	return fmt.Errorf("wamp: %s: %w", op, err)
 }
 
 // requestError converts the error of a nexus SUBSCRIBE, REGISTER, PUBLISH,
-// UNSUBSCRIBE or UNREGISTER request: a router refusal becomes a *WampError
-// (see parseWampError), anything else is wrapped by opError.
+// UNSUBSCRIBE or UNREGISTER request: a router refusal becomes an *Error (see
+// parseRefusal), anything else is wrapped by opError.
 func (c *Connection) requestError(op, nexusPrefix string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if werr := parseWampError(err.Error(), nexusPrefix); werr != nil {
+	if werr := parseRefusal(err.Error(), nexusPrefix); werr != nil {
 		return werr
 	}
 	return c.opError(op, err)
@@ -85,7 +85,7 @@ func (c *Connection) requestError(op, nexusPrefix string, err error) error {
 func (c *Connection) callError(procedure string, err error) error {
 	var rpcErr client.RPCError
 	if errors.As(err, &rpcErr) && rpcErr.Err != nil {
-		return newWampError(rpcErr.Err)
+		return newError(rpcErr.Err)
 	}
 	return c.opError("call of procedure '"+procedure+"'", err)
 }

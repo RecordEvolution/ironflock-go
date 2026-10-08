@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // The URL comes back with the write, so an app can stamp it into a table row
@@ -353,7 +353,7 @@ func TestExists(t *testing.T) {
 		{"missing", fail(CodeNoSuchObject, "gone"), false, false},
 		{"not authorized", fail(CodeNotAuthorized, "no"), false, true},
 		{"no such namespace", fail(CodeNoSuchNamespace, "no"), false, true},
-		{"no file service", &crossbar.WampError{URI: crossbar.ErrURINoSuchProcedure}, false, true},
+		{"no file service", &wamp.Error{URI: wamp.URINoSuchProcedure}, false, true},
 		{"not connected", errors.New("not connected"), false, true},
 	}
 	for _, tc := range cases {

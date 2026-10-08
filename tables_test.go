@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 var bg = context.Background()
@@ -42,7 +42,7 @@ func TestPublishIsAcknowledgedAndCarriesDeviceMetadata(t *testing.T) {
 		Topic:  "test.topic",
 		Args:   []any{int64(42), "two"},
 		Kwargs: deviceMetadata(),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: 0, // a plain publish waits the default session timeout
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -138,7 +138,7 @@ func TestPublishToTableTargetsTheTableTopic(t *testing.T) {
 		Topic:  "10.20.sensordata",
 		Args:   []any{map[string]any{"temp": int64(22)}},
 		Kwargs: deviceMetadata(),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: DefaultReconnectWindow,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -233,7 +233,7 @@ func TestTableWritesNeedSwarmAndAppKey(t *testing.T) {
 
 func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(map[string]any{"success": true}), nil }
 	res, err := f.AppendToTable(bg, "sensordata", Row{"temperature": 21.5}, Kwargs{"batch": "b1"}, CallOptions{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 		t.Errorf("call %#v\nwant %#v", got, want)
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr(crossbar.ErrURINoSuchProcedure) }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URINoSuchProcedure) }
 	_, err = f.AppendToTable(bg, "sensordata", Row{})
 	if want := "Append to table 'sensordata' failed with WAMP error 'wamp.error.no_such_procedure'"; err == nil || err.Error() != want {
 		t.Errorf("error %v, want %q", err, want)
@@ -263,7 +263,7 @@ func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 func TestReconnectWindowOnlyForTableOperations(t *testing.T) {
 	for _, window := range []time.Duration{DefaultReconnectWindow, 0, 5 * time.Second} {
 		f := flock(t, WithReconnectWindow(window))
-		f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return &crossbar.Result{}, nil }
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return &wamp.Result{}, nil }
 		_ = f.PublishToTable(bg, "t", Row{})
 		_ = f.PublishRowsToTable(bg, "t", []Row{{}})
 		_, _ = f.AppendToTable(bg, "t", Row{})
@@ -309,7 +309,7 @@ type sensorReading struct {
 
 func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) {
 		return resultOf(map[string]any{"success": true, "count": int64(2)}), nil
 	}
 	rows := []Row{{"temp": 22}, {"temp": 23}}
@@ -323,7 +323,7 @@ func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 		Topic:  "bulk.10.20.sensordata",
 		Args:   []any{wantRows},
 		Kwargs: withMetadata(map[string]any{"source": "plc"}),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: DefaultReconnectWindow,
 	}
 	if !reflect.DeepEqual(pub, wantPub) {
@@ -358,7 +358,7 @@ func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 		t.Errorf("struct rows %#v", got)
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) {
 		return nil, wampErr("wamp.error.invalid_argument", "bad row")
 	}
 	_, err = f.AppendRowsToTable(bg, "sensordata", rows)
@@ -431,7 +431,7 @@ func TestReportErrorPublishesAnAppTaggedRow(t *testing.T) {
 
 func TestReportErrorAppendUsesTheAppendProcedure(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(map[string]any{"success": true}), nil }
 	res, err := f.ReportError(bg, "kaboom", ReportErrorOptions{Append: true, Tsp: "2026-01-01T00:00:00.000Z"})
 	if err != nil {
 		t.Fatal(err)
@@ -505,7 +505,7 @@ func TestSubscribeToTableSubscribesBothFeeds(t *testing.T) {
 		defer mu.Unlock()
 		got = append(got, ev)
 	}
-	opts := SubscribeOptions{GetRetained: true}
+	opts := SubscribeOptions{Extra: map[string]any{"custom_option": true}}
 	ts, err := f.SubscribeToTable(bg, "sensordata", handler, opts)
 	if err != nil {
 		t.Fatal(err)
