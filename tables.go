@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -84,9 +85,15 @@ func (f *IronFlock) publish(ctx context.Context, group, topic string, args []any
 	return f.publishMessage(ctx, topic, pos, kw, window)
 }
 
+// publishMessage sends an acknowledged publication with the device metadata
+// merged into its kwargs, waiting up to window for a session (and, issued
+// before Start, for Start).
 func (f *IronFlock) publishMessage(ctx context.Context, topic string, args []any, kwargs map[string]any, window time.Duration) error {
-	err := f.conn.Publish(ctx, topic, args, f.withDeviceMetadata(kwargs),
-		&wamp.PublishOptions{Acknowledge: true}, window)
+	window, err := f.gate(ctx, window)
+	if err == nil {
+		err = f.conn.Publish(ctx, topic, args, f.withDeviceMetadata(kwargs),
+			&wamp.PublishOptions{Acknowledge: true}, window)
+	}
 	return operationFailed(fmt.Sprintf("Publish to topic '%s'", topic), err)
 }
 
@@ -122,7 +129,7 @@ func (f *IronFlock) AppendToTable(ctx context.Context, table string, args ...any
 		return nil, err
 	}
 	topic := fmt.Sprintf("append.%d.%d.%s", f.swarmKey, f.appKey, t)
-	res, err := f.conn.Call(ctx, topic, pos, f.withDeviceMetadata(kw), callOpts, f.reconnectWindow)
+	res, err := f.call(ctx, topic, pos, f.withDeviceMetadata(kw), callOpts, f.reconnectWindow)
 	if err != nil {
 		return nil, operationFailed(fmt.Sprintf("Append to table '%s'", t), err)
 	}
@@ -177,7 +184,7 @@ func (f *IronFlock) AppendRowsToTable(ctx context.Context, table string, rows an
 		return nil, err
 	}
 	topic := fmt.Sprintf("appendBulk.%d.%d.%s", f.swarmKey, f.appKey, t)
-	res, err := f.conn.Call(ctx, topic, []any{batch}, f.withDeviceMetadata(kw), nil, f.reconnectWindow)
+	res, err := f.call(ctx, topic, []any{batch}, f.withDeviceMetadata(kw), nil, f.reconnectWindow)
 	if err != nil {
 		return nil, operationFailed(fmt.Sprintf("Bulk append of %d row(s) to table '%s'", len(batch), t), err)
 	}
@@ -272,13 +279,21 @@ type TableSubscription struct {
 	Rows *Subscription
 	Bulk *Subscription
 	conn wampConn
+	// closed is set by Unsubscribe: no handler call starts after it.
+	closed atomic.Bool
 }
 
-// Unsubscribe removes both subscriptions.
+// Unsubscribe removes both subscriptions. It takes effect at once: the
+// handler is called for no further event — neither one still queued for
+// either feed nor a remaining row of a bulk event being delivered — though a
+// call already under way is not waited for (the handler may call
+// Unsubscribe itself). The subscriptions are then removed as
+// wamp.Connection.Unsubscribe removes them, within ctx.
 func (t *TableSubscription) Unsubscribe(ctx context.Context) error {
 	if t == nil || t.conn == nil {
 		return nil
 	}
+	t.closed.Store(true)
 	var errs []error
 	for _, sub := range []*Subscription{t.Rows, t.Bulk} {
 		if sub == nil {
@@ -296,6 +311,11 @@ func (t *TableSubscription) Unsubscribe(ctx context.Context) error {
 // transformed.bulk.<table>. Each event carries one row as stored — typed to
 // the data-template columns, secret columns masked — in Args[0] (see
 // Event.Row); rows of a bulk insert are delivered one event per row.
+//
+// handler is called one event at a time, in the order the events arrive on
+// both feeds, as one subscription calls its handler (see EventHandler): it
+// never runs concurrently with itself. The two feeds deliver through one
+// wamp.DeliveryGroup — opts' Group if it sets one, else a group of their own.
 func (f *IronFlock) SubscribeToTable(ctx context.Context, table string, handler EventHandler, opts ...SubscribeOptions) (*TableSubscription, error) {
 	if err := validateTopic("subscription", table); err != nil {
 		return nil, err
@@ -303,27 +323,46 @@ func (f *IronFlock) SubscribeToTable(ctx context.Context, table string, handler 
 	if err := f.requireKeys(); err != nil {
 		return nil, err
 	}
+	if handler == nil {
+		return nil, invalidf("Invalid subscription parameters: handler must not be nil")
+	}
+	if _, err := f.gate(ctx, 0); err != nil {
+		return nil, operationFailed(fmt.Sprintf("Subscription to topic 'transformed.%s'", table), err)
+	}
 	return subscribeTable(ctx, f.conn, f.log, f.cleanupTimeout, table, handler, opts)
 }
 
 // subscribeTable subscribes handler to transformed.<table> and, unrolled to
-// one event per row, to transformed.bulk.<table>. When the second
-// subscription fails the first is removed again.
+// one event per row, to transformed.bulk.<table>, both delivering through
+// one DeliveryGroup. When the second subscription fails the first is
+// removed again.
 func subscribeTable(ctx context.Context, conn wampConn, log *slog.Logger, cleanup time.Duration,
 	table string, handler EventHandler, opts []SubscribeOptions) (*TableSubscription, error) {
 	if handler == nil {
 		return nil, invalidf("Invalid subscription parameters: handler must not be nil")
 	}
 	so := firstSubscribeOptions(opts)
+	if so == nil {
+		so = &SubscribeOptions{}
+	}
+	if so.Group == nil {
+		so.Group = wamp.NewDeliveryGroup()
+	}
+	ts := &TableSubscription{conn: conn}
+	deliver := func(ev *Event) {
+		if !ts.closed.Load() {
+			handler(ev)
+		}
+	}
 
 	rowsTopic := "transformed." + table
-	rows, err := conn.Subscribe(ctx, rowsTopic, handler, so)
+	rows, err := conn.Subscribe(ctx, rowsTopic, deliver, so)
 	if err != nil {
 		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", rowsTopic), err)
 	}
 
 	bulkTopic := "transformed.bulk." + table
-	bulk, err := conn.Subscribe(ctx, bulkTopic, unrollBulk(handler, log), so)
+	bulk, err := conn.Subscribe(ctx, bulkTopic, unrollBulk(deliver, log), so)
 	if err != nil {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanup)
 		defer cancel()
@@ -332,15 +371,16 @@ func subscribeTable(ctx context.Context, conn wampConn, log *slog.Logger, cleanu
 		}
 		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", bulkTopic), err)
 	}
-	return &TableSubscription{Rows: rows, Bulk: bulk, conn: conn}, nil
+	ts.Rows, ts.Bulk = rows, bulk
+	return ts, nil
 }
 
 // unrollBulk wraps handler for a bulk feed, whose events carry the whole
 // batch as Args[0]: handler receives one event per row, Args = [row], with the
-// batch event's topic, kwargs and details. A nil batch delivers nothing, a
-// value that is not a list is delivered as a single row, and nil rows are
-// skipped. A panicking handler is recovered and logged per row, so it does
-// not cost the remaining rows of the batch.
+// batch event's topic, kwargs and details, one after another. A nil batch
+// delivers nothing, a value that is not a list is delivered as a single row,
+// and nil rows are skipped. A panicking handler is recovered and logged per
+// row, so it does not cost the remaining rows of the batch.
 func unrollBulk(handler EventHandler, log *slog.Logger) EventHandler {
 	deliver := func(ev *Event, row any) {
 		defer func() {

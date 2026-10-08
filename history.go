@@ -58,7 +58,7 @@ func (f *IronFlock) GetHistory(ctx context.Context, table string, q *TableQueryP
 	}
 	op := fmt.Sprintf("getHistory('%s')", table)
 	topic := "history.transformed." + table
-	res, err := f.conn.Call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
+	res, err := f.call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
 	if err != nil {
 		return nil, historyFailed(op, topic, err, false)
 	}
@@ -77,7 +77,7 @@ func (f *IronFlock) GetSeriesHistory(ctx context.Context, table string, q Series
 	}
 	op := fmt.Sprintf("getSeriesHistory('%s')", table)
 	topic := "history.transformed.series." + table
-	res, err := f.conn.Call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
+	res, err := f.call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
 	if err != nil {
 		return nil, historyFailed(op, topic, err, false)
 	}
@@ -100,7 +100,7 @@ func (f *IronFlock) RevealSecrets(ctx context.Context, table string, q *TableQue
 	}
 	op := fmt.Sprintf("revealSecrets('%s')", table)
 	topic := "secret.reveal." + table
-	res, err := f.conn.Call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
+	res, err := f.call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
 	if err != nil {
 		return nil, historyFailed(op, topic, err, true)
 	}
@@ -132,7 +132,7 @@ func (f *IronFlock) VerifySecret(ctx context.Context, table, column, candidate s
 
 	op := fmt.Sprintf("verifySecret('%s')", table)
 	topic := "secret.verify." + table
-	res, err := f.conn.Call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
+	res, err := f.call(ctx, topic, []any{wire}, nil, nil, f.reconnectWindow)
 	if err != nil {
 		return nil, historyFailed(op, topic, err, true)
 	}

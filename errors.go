@@ -1,11 +1,11 @@
 package ironflock
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
@@ -19,6 +19,10 @@ var ErrInvalidArgument = errors.New("ironflock: invalid argument")
 // into every app container; outside one, set them yourself (environment or
 // the With… options). Test with errors.Is.
 var ErrMissingConfig = errors.New("ironflock: missing configuration")
+
+// ErrAlreadyStarted is returned by Start, and by Run, on an IronFlock that is
+// started already or whose Start is still running.
+var ErrAlreadyStarted = errors.New("ironflock: Start called while already started")
 
 // sdkError is an error the SDK raises itself, before any router traffic: a
 // message classified by one or more of the sentinel errors above.
@@ -76,6 +80,10 @@ type OperationError struct {
 //
 //	<Op> failed with WAMP error '<uri>'[ — <json args>]
 //	<Op> failed: <hint or cause>
+//
+// The args are compact JSON as JavaScript's JSON.stringify writes it,
+// without escaping <, > and & (args JSON cannot encode, such as NaN, are
+// printed as Go values).
 func (e *OperationError) Error() string {
 	if e.hint != "" {
 		return fmt.Sprintf("%s failed: %s", e.Op, e.hint)
@@ -84,11 +92,7 @@ func (e *OperationError) Error() string {
 	if errors.As(e.Err, &werr) {
 		detail := ""
 		if len(werr.Args) > 0 {
-			if data, err := json.Marshal(werr.Args); err == nil {
-				detail = " — " + string(data)
-			} else {
-				detail = fmt.Sprintf(" — %v", werr.Args)
-			}
+			detail = " — " + jsontext.Compact(werr.Args)
 		}
 		return fmt.Sprintf("%s failed with WAMP error '%s'%s", e.Op, werr.URI, detail)
 	}
@@ -199,7 +203,8 @@ var crossAppCodes = map[string]string{
 
 // mapCrossAppError maps a WAMP refusal to a *CrossAppAccessError, or returns
 // nil when the URI is not a cross-app access condition. The message is the
-// URI followed by ": <json of the first error argument>", if any.
+// URI followed by ": <json of the first error argument>", if any, in compact
+// JSON without HTML escaping, as the Python and JavaScript SDKs write it.
 func mapCrossAppError(err error) *CrossAppAccessError {
 	var werr *wamp.Error
 	if !errors.As(err, &werr) {
@@ -211,11 +216,7 @@ func mapCrossAppError(err error) *CrossAppAccessError {
 	}
 	msg := werr.URI
 	if len(werr.Args) > 0 {
-		if data, jerr := json.Marshal(werr.Args[0]); jerr == nil {
-			msg += ": " + string(data)
-		} else {
-			msg += fmt.Sprintf(": %v", werr.Args[0])
-		}
+		msg += ": " + jsontext.Compact(werr.Args[0])
 	}
 	return &CrossAppAccessError{Code: code, Message: msg, Err: err}
 }

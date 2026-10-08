@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -69,6 +70,7 @@ func TestPublishSendsUnknownMetadataAsNil(t *testing.T) {
 	setIdentityEnv(t)
 	unsetEnv(t, "DEVICE_KEY", "DEVICE_NAME")
 	f := newTestFlock(t)
+	f.start(t)
 	if err := f.Publish(bg, "test.topic"); err != nil {
 		t.Fatal(err)
 	}
@@ -391,11 +393,12 @@ func (e tracedError) Error() string { return e.msg }
 
 // Format adds a stack trace for %+v, like github.com/pkg/errors does.
 func (e tracedError) Format(s fmt.State, verb rune) {
+	// A Formatter has no way to report a failed write.
 	if verb == 'v' && s.Flag('+') {
-		fmt.Fprintf(s, "%s\nmain.main\n\t/app/main.go:12", e.msg)
+		_, _ = fmt.Fprintf(s, "%s\nmain.main\n\t/app/main.go:12", e.msg)
 		return
 	}
-	fmt.Fprint(s, e.msg)
+	_, _ = fmt.Fprint(s, e.msg)
 }
 
 type stringer struct{}
@@ -514,10 +517,18 @@ func TestSubscribeToTableSubscribesBothFeeds(t *testing.T) {
 	if len(subs) != 2 || subs[0].Topic != "transformed.sensordata" || subs[1].Topic != "transformed.bulk.sensordata" {
 		t.Fatalf("subscriptions %#v", subs)
 	}
+	// Both feeds deliver through one DeliveryGroup, with the caller's
+	// options otherwise; the caller's options are left alone.
 	for _, s := range subs {
-		if !reflect.DeepEqual(s.Opts, &opts) {
+		if s.Opts == nil || !reflect.DeepEqual(s.Opts.Extra, opts.Extra) || s.Opts.Match != opts.Match {
 			t.Errorf("%s: options %#v", s.Topic, s.Opts)
 		}
+	}
+	if subs[0].Opts.Group == nil || subs[0].Opts.Group != subs[1].Opts.Group {
+		t.Errorf("delivery groups %p and %p, want one", subs[0].Opts.Group, subs[1].Opts.Group)
+	}
+	if opts.Group != nil {
+		t.Error("the caller's options were changed")
 	}
 	if ts.Rows != subs[0].Sub || ts.Bulk != subs[1].Sub {
 		t.Error("TableSubscription does not hold both subscriptions")
@@ -666,5 +677,78 @@ func TestSubscribe(t *testing.T) {
 	}
 	if _, err := f.Subscribe(bg, "t", nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("nil handler: %v", err)
+	}
+}
+
+// A DeliveryGroup the caller passes is the one both feeds deliver through.
+func TestSubscribeToTableUsesTheCallersDeliveryGroup(t *testing.T) {
+	f := flock(t)
+	group := wamp.NewDeliveryGroup()
+	if _, err := f.SubscribeToTable(bg, "sensordata", func(*Event) {}, SubscribeOptions{Group: group}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range f.own.allSubs() {
+		if s.Opts.Group != group {
+			t.Errorf("%s delivers through %p, want the caller's %p", s.Topic, s.Opts.Group, group)
+		}
+	}
+}
+
+// Once Unsubscribe has begun, the handler is called no more: not for the
+// rest of a bulk event being delivered, nor for an event that was queued
+// before the subscriptions were removed.
+func TestTableSubscriptionDeliversNothingOnceUnsubscribed(t *testing.T) {
+	f := flock(t)
+	var ts *TableSubscription
+	var got []any
+	ts, err := f.SubscribeToTable(bg, "sensordata", func(ev *Event) {
+		got = append(got, ev.Row()["n"])
+		if len(got) == 1 {
+			if err := ts.Unsubscribe(bg); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs := f.own.allSubs() // the handlers, as the connection holds them
+	subs[1].Handler(&Event{Args: []any{[]any{map[string]any{"n": int64(1)}, map[string]any{"n": int64(2)}}}})
+	subs[0].Handler(&Event{Args: []any{map[string]any{"n": int64(3)}}})
+	subs[1].Handler(&Event{Args: []any{[]any{map[string]any{"n": int64(4)}}}})
+	if !reflect.DeepEqual(got, []any{int64(1)}) {
+		t.Errorf("delivered %v, want only the row before Unsubscribe", got)
+	}
+}
+
+// NaN and ±Inf — say, a failed sensor read — are published alike whether
+// the row is a Row or a struct, as the Python and JavaScript SDKs send them
+// (msgpack float64).
+func TestPublishToTableSendsNonFiniteFloatsOfRowsAndStructsAlike(t *testing.T) {
+	type reading struct {
+		Temperature float64 `json:"temperature"`
+	}
+	f := flock(t)
+	for _, x := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := f.PublishToTable(bg, "sensordata", Row{"temperature": x}); err != nil {
+			t.Fatalf("Row with %v: %v", x, err)
+		}
+		if err := f.PublishToTable(bg, "sensordata", reading{Temperature: x}); err != nil {
+			t.Fatalf("struct with %v: %v", x, err)
+		}
+		pubs := f.own.allPublishes()
+		fromRow, fromStruct := pubs[len(pubs)-2], pubs[len(pubs)-1]
+		for _, p := range []fakePublish{fromRow, fromStruct} {
+			row, ok := p.Args[0].(map[string]any)
+			if !ok || len(row) != 1 {
+				t.Fatalf("%v: published %#v", x, p.Args)
+			}
+			if got, ok := row["temperature"].(float64); !ok || !(got == x || math.IsNaN(got) && math.IsNaN(x)) {
+				t.Errorf("%v: published %#v", x, row["temperature"])
+			}
+		}
+		if !reflect.DeepEqual(fromRow.Kwargs, fromStruct.Kwargs) || fromRow.Topic != fromStruct.Topic {
+			t.Errorf("%v: %#v and %#v", x, fromRow, fromStruct)
+		}
 	}
 }

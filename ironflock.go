@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -151,8 +152,10 @@ func WithCredentials(authID, secret string) Option {
 // GetHistory, GetSeriesHistory, RevealSecrets, VerifySecret, and a consumed
 // app's history reads) rides out a platform restart before it fails: it
 // waits that long for the connection to come back and for the platform to
-// serve the app's tables again. Default 60s; 0 turns it off (the default
-// 10s connection wait, no retries).
+// serve the app's tables again. A table operation issued before Start waits
+// for Start within the same window. Default 60s; 0 turns it off (the
+// default 10s connection wait, no retries). Other operations, file calls
+// included, wait 10s for the connection and are not retried.
 func WithReconnectWindow(d time.Duration) Option {
 	return func(c *config) { c.reconnectWindow = d }
 }
@@ -174,10 +177,22 @@ type wampConn interface {
 	Unsubscribe(ctx context.Context, sub *wamp.Subscription) error
 	Register(ctx context.Context, procedure string, handler wamp.InvocationHandler, opts *wamp.RegisterOptions) (*wamp.Registration, error)
 	Unregister(ctx context.Context, reg *wamp.Registration) error
+	WaitSession(ctx context.Context, timeout time.Duration) error
 }
 
 // IronFlock is a connection to the IronFlock platform for one app on one
 // device. It is safe for concurrent use.
+//
+// Lifecycle: New, then Start (or Run, which starts, runs the app's main
+// function and stops), then Stop, which is final.
+//
+// Operations may be issued before Start, for example by goroutines started
+// before Run: they wait for Start to configure the connection, and then for
+// the connection, within the time they wait for a connection anyway — the
+// reconnect window for table operations (see WithReconnectWindow), 10s for
+// the others, file calls included. When that time passes first they fail
+// with an error wrapping wamp.ErrNotConnected, and Stop makes them fail with
+// one wrapping wamp.ErrStopped.
 type IronFlock struct {
 	log *slog.Logger
 
@@ -199,22 +214,35 @@ type IronFlock struct {
 	newConn func() wampConn
 
 	mu         sync.Mutex
-	configured bool
-	started    bool
+	configured bool // by Start, once (see ready)
+	started    bool // a Start is running or has succeeded
 	stopped    bool
 	files      *filestore.FileStore
 	consumed   map[string]*consumedEntry
 	// stopDone is closed when the first Stop has finished; nil before it.
 	stopDone chan struct{}
 
-	// openCtx is the context consumed-app opens run on: detached from the
-	// callers that share an open (one caller giving up must not fail it for
-	// the others), cancelled by Stop.
-	openCtx    context.Context
-	openCancel context.CancelFunc
+	// ready is closed once Start has configured conn. Operations issued
+	// before wait for it (see awaitStart).
+	ready chan struct{}
+	// startWaiters counts the operations waiting for ready.
+	startWaiters atomic.Int32
+
+	// lifetime is cancelled when Stop begins. It ends the waits for Start
+	// and the context Run passes to main, and consumed-app opens run on it:
+	// detached from the callers that share an open (one caller giving up
+	// must not fail it for the others), but aborted by Stop.
+	lifetime    context.Context
+	endLifetime context.CancelFunc
 
 	runStopTimeout time.Duration
 	cleanupTimeout time.Duration
+	// sessionWait is how long an operation without a window of its own
+	// waits for Start: the connection's default session wait.
+	sessionWait time.Duration
+	// afterOpenSettled, set by tests, is called once a successful
+	// consumed-app open has settled its outcome (see runOpen).
+	afterOpenSettled func()
 }
 
 // New creates an IronFlock instance from the environment the device agent
@@ -266,10 +294,12 @@ func newWithConn(conn wampConn, newConn func() wampConn, opts ...Option) (*IronF
 		conn:            conn,
 		newConn:         newConn,
 		consumed:        make(map[string]*consumedEntry),
+		ready:           make(chan struct{}),
 		runStopTimeout:  defaultRunStopTimeout,
 		cleanupTimeout:  defaultCleanupTimeout,
+		sessionWait:     wamp.DefaultSessionWaitTimeout,
 	}
-	f.openCtx, f.openCancel = context.WithCancel(context.Background())
+	f.lifetime, f.endLifetime = context.WithCancel(context.Background())
 
 	var missing []string
 	if f.deviceKey == "" {
@@ -318,7 +348,9 @@ func keySetting(log *slog.Logger, opt *int, name string) int {
 	return v
 }
 
-// Connection returns the underlying connection, for advanced use.
+// Connection returns the underlying connection, for advanced use. Its
+// operations do not wait for Start as the IronFlock's do: until Start has
+// configured the connection they fail with wamp.ErrNotConfigured.
 func (f *IronFlock) Connection() *wamp.Connection {
 	c, _ := f.conn.(*wamp.Connection)
 	return c
@@ -350,15 +382,97 @@ func (f *IronFlock) SwarmKey() int { return f.swarmKey }
 // AppKey returns the app key (0 when unknown).
 func (f *IronFlock) AppKey() int { return f.appKey }
 
-// Files returns the app's managed object storage. It is safe to use before
-// Start: every call waits for the connection like the table API does.
+// Files returns the app's managed object storage. It does no I/O, so it may
+// be called before Start; a file call issued before Start waits for it like
+// any other operation (see IronFlock).
+//
+// A file call waits up to 10s for the connection and is not retried: unlike
+// table operations, file calls do not use the reconnect window (see
+// WithReconnectWindow), so during a platform restart a call can fail with
+// filestore.CodeNotAvailable until the file service has registered again.
+// Stop closes the idle HTTP connections of the store's direct transfers.
 func (f *IronFlock) Files() *filestore.FileStore {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.files == nil {
-		f.files = filestore.New(f.conn, nil)
+		f.files = filestore.New(startGatedCaller{f}, nil)
 	}
 	return f.files
+}
+
+// startGatedCaller is the filestore.Caller of Files: the connection, with
+// calls issued before Start waiting for it (see awaitStart).
+type startGatedCaller struct{ f *IronFlock }
+
+func (c startGatedCaller) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retryWindow time.Duration) (*wamp.Result, error) {
+	return c.f.call(ctx, procedure, args, kwargs, opts, retryWindow)
+}
+
+// awaitStart holds an operation issued before Start until Start has
+// configured the connection. window is the time the operation waits for a
+// session (0: sessionWait), and the wait for Start counts against it: when
+// the operation had to wait (waited), rest is what is left of window. It
+// fails with ctx's error when ctx ends, with wamp.ErrStopped when Stop is
+// called, and with an error wrapping wamp.ErrNotConnected when window passes
+// first.
+func (f *IronFlock) awaitStart(ctx context.Context, window time.Duration) (rest time.Duration, waited bool, err error) {
+	select {
+	case <-f.ready:
+		return window, false, nil
+	default:
+	}
+	if f.lifetime.Err() != nil {
+		return 0, false, wamp.ErrStopped
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	if window <= 0 {
+		window = f.sessionWait
+	}
+	deadline := time.Now().Add(window)
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	f.startWaiters.Add(1)
+	defer f.startWaiters.Add(-1)
+	select {
+	case <-f.ready:
+		// At least a moment: a window of 0 would mean the default again.
+		return max(time.Until(deadline), time.Nanosecond), true, nil
+	case <-f.lifetime.Done():
+		return 0, true, wamp.ErrStopped
+	case <-timer.C:
+		return 0, true, fmt.Errorf("ironflock: the connection was not started within %v: %w", window, wamp.ErrNotConnected)
+	case <-ctx.Done():
+		if f.lifetime.Err() != nil {
+			return 0, true, wamp.ErrStopped // ctx may be lifetime itself
+		}
+		return 0, true, ctx.Err()
+	}
+}
+
+// gate holds an operation issued before Start (see awaitStart) and returns
+// the window to pass on to the connection: window, or what is left of it
+// after the wait for Start. An operation without a window (0) waits for the
+// session, within what is left of the default session wait, here instead.
+func (f *IronFlock) gate(ctx context.Context, window time.Duration) (time.Duration, error) {
+	rest, waited, err := f.awaitStart(ctx, window)
+	if err != nil || !waited {
+		return window, err
+	}
+	if window > 0 {
+		return rest, nil
+	}
+	return 0, f.conn.WaitSession(ctx, rest)
+}
+
+// call is f.conn.Call behind the wait for Start.
+func (f *IronFlock) call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *CallOptions, retryWindow time.Duration) (*Result, error) {
+	window, err := f.gate(ctx, retryWindow)
+	if err != nil {
+		return nil, err
+	}
+	return f.conn.Call(ctx, procedure, args, kwargs, opts, window)
 }
 
 // Start configures and opens the connection, and blocks until the app's
@@ -366,9 +480,15 @@ func (f *IronFlock) Files() *filestore.FileStore {
 // data backend is still being provisioned) is waited for.
 //
 // Start fails at once, with an error wrapping ErrMissingConfig, when
-// SWARM_KEY or APP_KEY is unknown: the realm could never be joined. A
-// failed Start may be retried; Start on a started or stopped IronFlock is
-// an error.
+// SWARM_KEY or APP_KEY is unknown: the realm could never be joined. When it
+// fails otherwise — ctx ends before the join, or the router URL cannot be
+// resolved — no further connection attempt is made, and Start may be called
+// again; operations waiting for the connection keep waiting within their
+// windows.
+//
+// Start on an IronFlock that is started already, or whose Start is still
+// running, fails with ErrAlreadyStarted; after Stop it fails with an error
+// wrapping wamp.ErrStopped.
 func (f *IronFlock) Start(ctx context.Context) error {
 	// The realm realm-<SWARM_KEY>-<APP_KEY>-<stage> can never exist without
 	// both keys, so waiting for it would only hang.
@@ -383,10 +503,12 @@ func (f *IronFlock) Start(ctx context.Context) error {
 		return fmt.Errorf("ironflock: Start after Stop: %w", wamp.ErrStopped)
 	case f.started:
 		f.mu.Unlock()
-		return errors.New("ironflock: Start called while already started")
+		return ErrAlreadyStarted
 	}
-	f.started = true
 	if !f.configured {
+		// The connection is configured once, by the first Start that gets
+		// this far: a wamp.Connection keeps its configuration across a
+		// failed Start.
 		url, err := f.routerURL()
 		if err == nil {
 			err = f.conn.Configure(wamp.Config{
@@ -401,16 +523,17 @@ func (f *IronFlock) Start(ctx context.Context) error {
 			})
 		}
 		if err != nil {
-			f.started = false
 			f.mu.Unlock()
 			return err
 		}
 		f.configured = true
+		close(f.ready) // operations waiting for Start go on to the connection
 	}
+	f.started = true
 	f.mu.Unlock()
 
 	if err := f.conn.Start(ctx); err != nil {
-		// A failed Start may be retried.
+		// The connection makes no further attempt and may be started again.
 		f.mu.Lock()
 		f.started = false
 		f.mu.Unlock()
@@ -428,13 +551,40 @@ func (f *IronFlock) routerURL() (string, error) {
 	return wamp.WebSocketURI(f.reswarmURL)
 }
 
-// Stop closes every consumed-app connection and the connection itself. It
-// is idempotent.
+// runContextKey marks the context Run passes to main; its value is the
+// IronFlock running main.
+type runContextKey struct{}
+
+// Stop closes every consumed-app connection and the connection itself, and
+// waits for that within ctx. It is idempotent: a later Stop waits for the
+// first one within its own ctx. Stop is final.
 //
-// Consumed-app connections still opening are aborted. Afterwards
-// operations fail, and ConnectToApp returns an error wrapping
+// Stop first ends what waits on the instance: consumed-app connections still
+// opening are aborted (their ConnectToApp fails with an error wrapping
+// wamp.ErrStopped), operations waiting for Start fail with wamp.ErrStopped,
+// and the context Run passes to main is cancelled, so Run returns once main
+// does. Stop does not wait for main, which may call Stop itself — even with
+// that context: Stop does not let it cut the shutdown short, but stops within
+// 10s, like the Stop Run performs after main (or by the context's deadline,
+// if that is sooner). Afterwards operations fail with an error wrapping
 // wamp.ErrStopped.
+//
+// Stop also closes the idle HTTP connections of the store Files returns (see
+// filestore.FileStore.CloseIdleConnections): a direct transfer still in
+// progress is not interrupted, and its connection returns to the pool when
+// it ends.
 func (f *IronFlock) Stop(ctx context.Context) error {
+	if ctx.Value(runContextKey{}) == f {
+		// main's context, which this Stop cancels.
+		deadline := time.Now().Add(f.runStopTimeout)
+		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		defer cancel()
+	}
+
 	f.mu.Lock()
 	if f.stopDone != nil {
 		// Stopped or stopping: wait for the first Stop to finish.
@@ -458,11 +608,19 @@ func (f *IronFlock) Stop(ctx context.Context) error {
 	f.mu.Unlock()
 	defer close(done)
 
-	// Abort consumed-app opens still in flight; one that completes anyway
-	// closes its own connection (see runOpen).
-	f.openCancel()
+	// Abort consumed-app opens still in flight (one that completes anyway
+	// closes its own connection: see runOpen), wake the operations waiting
+	// for Start and end Run's main context.
+	f.endLifetime()
 	f.closeConsumed(ctx, entries)
-	return f.conn.Stop(ctx)
+	err := f.conn.Stop(ctx)
+	f.mu.Lock()
+	files := f.files
+	f.mu.Unlock()
+	if files != nil {
+		files.CloseIdleConnections()
+	}
+	return err
 }
 
 // closeConsumed closes the consumed apps of entries concurrently, waiting for
@@ -473,9 +631,10 @@ func (f *IronFlock) closeConsumed(ctx context.Context, entries []*consumedEntry)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// An attempt still in flight when ctx ends closes its own
-			// connection (see runOpen); a finished one is always closed here,
-			// even when ctx has ended already.
+			// An attempt that had not finished when Stop took its snapshot
+			// closes its own connection (runOpen decides under f.mu, under
+			// which the snapshot was taken); a finished one is always closed
+			// here, even when ctx has ended already.
 			select {
 			case <-e.done:
 			default:
@@ -496,15 +655,37 @@ func (f *IronFlock) closeConsumed(ctx context.Context, entries []*consumedEntry)
 	wg.Wait()
 }
 
-// Run starts the connection, runs main, and stops when main returns, ctx is
-// done, or the process receives SIGINT or SIGTERM. With a nil main it runs
-// until ctx is done or a signal arrives. The context passed to main is
-// cancelled on shutdown. Run returns main's error, or the Start error.
+// Run starts the connection, runs main, and stops the connection (within
+// 10s) when main returns. The context Run passes to main is cancelled when
+// ctx is done, when Stop is called (from main, a handler or another
+// goroutine) and when the process receives SIGINT or SIGTERM; main is
+// expected to return then. With a nil main Run waits for one of these.
+//
+// Run returns main's error; when its Start fails, it stops the IronFlock and
+// returns the Start error. Once shutdown has begun, a second SIGINT or
+// SIGTERM is no longer handled: it terminates the process, even while main
+// is still winding down.
+//
+// Run on an IronFlock that is started already, or whose Start is still
+// running (another Run, say), fails with ErrAlreadyStarted and leaves it
+// running.
 func (f *IronFlock) Run(ctx context.Context, main func(ctx context.Context) error) error {
 	runCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// Stop ends Run too, as the Python SDK's stop() cancels the main task.
+	unhookStop := context.AfterFunc(f.lifetime, cancel)
+	defer unhookStop()
+	// Restore the default signal behavior as soon as shutdown begins — a
+	// signal, ctx done, Stop, or main returning — so that another signal
+	// terminates the process while main winds down or Run stops.
+	unhookSignals := context.AfterFunc(runCtx, cancel)
+	defer unhookSignals()
+	runCtx = context.WithValue(runCtx, runContextKey{}, f)
 
 	err := f.Start(runCtx)
+	if errors.Is(err, ErrAlreadyStarted) {
+		return err // started by someone else: not Run's to stop
+	}
 	if err == nil {
 		if main != nil {
 			err = main(runCtx)
@@ -513,9 +694,7 @@ func (f *IronFlock) Run(ctx context.Context, main func(ctx context.Context) erro
 		}
 	}
 
-	// Restore the default signal behavior first, so a second Ctrl-C during
-	// the shutdown below terminates the process.
-	cancel()
+	cancel() // main may have returned on its own
 	stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), f.runStopTimeout)
 	defer stopCancel()
 	if serr := f.Stop(stopCtx); serr != nil {

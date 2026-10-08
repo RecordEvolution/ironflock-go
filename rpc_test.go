@@ -82,6 +82,7 @@ func TestDeviceFunctionURIsCarryTheRealmStage(t *testing.T) {
 		setIdentityEnv(t)
 		t.Setenv("ENV", tc.env)
 		f := newTestFlock(t)
+		f.start(t)
 		if _, err := f.RegisterDeviceFunction(bg, "com.myapp.add", func(context.Context, *Invocation) (any, error) { return nil, nil }); err != nil {
 			t.Fatal(err)
 		}
@@ -177,6 +178,7 @@ func TestRegisterWithoutDeviceKeyFailsFast(t *testing.T) {
 		setIdentityEnv(t)
 		t.Setenv("DEVICE_KEY", key)
 		f := newTestFlock(t)
+		f.start(t)
 		handler := func(context.Context, *Invocation) (any, error) { return nil, nil }
 		_, err := f.RegisterDeviceFunction(bg, "toggle_lamp", handler)
 		if !errors.Is(err, ErrMissingConfig) || errors.Is(err, ErrInvalidArgument) {

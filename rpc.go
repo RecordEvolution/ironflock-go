@@ -31,6 +31,9 @@ func (f *IronFlock) Subscribe(ctx context.Context, topic string, handler EventHa
 	if handler == nil {
 		return nil, invalidf("Invalid subscription parameters: handler must not be nil")
 	}
+	if _, err := f.gate(ctx, 0); err != nil {
+		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", topic), err)
+	}
 	sub, err := f.conn.Subscribe(ctx, topic, handler, firstSubscribeOptions(opts))
 	if err != nil {
 		return nil, operationFailed(fmt.Sprintf("Subscription to topic '%s'", topic), err)
@@ -38,7 +41,8 @@ func (f *IronFlock) Subscribe(ctx context.Context, topic string, handler EventHa
 	return sub, nil
 }
 
-// Unsubscribe removes a subscription.
+// Unsubscribe removes a subscription as wamp.Connection.Unsubscribe does: at
+// once, the handler is called for no further event.
 func (f *IronFlock) Unsubscribe(ctx context.Context, sub *Subscription) error {
 	if sub == nil {
 		return nil
@@ -57,7 +61,7 @@ func (f *IronFlock) Call(ctx context.Context, topic string, args ...any) (*Resul
 	if err != nil {
 		return nil, invalidParams("call", err)
 	}
-	res, err := f.conn.Call(ctx, topic, pos, kw, callOpts, 0)
+	res, err := f.call(ctx, topic, pos, kw, callOpts, 0)
 	if err != nil {
 		return nil, operationFailed(fmt.Sprintf("Call of procedure '%s'", topic), err)
 	}
@@ -81,7 +85,7 @@ func (f *IronFlock) CallDeviceFunction(ctx context.Context, deviceKey int, topic
 		return nil, invalidParams("call", err)
 	}
 	f.log.Debug(fmt.Sprintf("Calling function '%s' on device '%d'. (Full WAMP topic: '%s')", topic, deviceKey, full))
-	res, err := f.conn.Call(ctx, full, pos, kw, callOpts, 0)
+	res, err := f.call(ctx, full, pos, kw, callOpts, 0)
 	if err != nil {
 		return nil, operationFailed(
 			fmt.Sprintf("Call of procedure '%s' on device '%d' (full WAMP topic '%s')", topic, deviceKey, full), err)
@@ -114,9 +118,13 @@ func (f *IronFlock) RegisterDeviceFunction(ctx context.Context, topic string, ha
 		o := opts[0]
 		ro = &o
 	}
+	op := fmt.Sprintf("Registration of procedure '%s'", full)
+	if _, err := f.gate(ctx, 0); err != nil {
+		return nil, operationFailed(op, err)
+	}
 	reg, err := f.conn.Register(ctx, full, handler, ro)
 	if err != nil {
-		return nil, operationFailed(fmt.Sprintf("Registration of procedure '%s'", full), err)
+		return nil, operationFailed(op, err)
 	}
 	f.log.Info(fmt.Sprintf("Function registered for IronFlock topic '%s'. (Full WAMP topic: '%s')", topic, full))
 	return reg, nil
@@ -134,7 +142,8 @@ func (f *IronFlock) Register(ctx context.Context, topic string, handler Invocati
 	return f.RegisterDeviceFunction(ctx, topic, handler, opts...)
 }
 
-// Unregister removes a registration.
+// Unregister removes a registration as wamp.Connection.Unregister does: at
+// once, the handler is called no more.
 func (f *IronFlock) Unregister(ctx context.Context, reg *Registration) error {
 	if reg == nil {
 		return nil
@@ -199,7 +208,7 @@ func (f *IronFlock) SetDeviceLocation(ctx context.Context, long, lat float64) (*
 		return nil, invalidf("Invalid location parameters: latitude must be between -90 and 90, got %v", lat)
 	}
 	payload := map[string]any{"long": long, "lat": lat}
-	res, err := f.conn.Call(ctx, uriLocationUpdate, []any{payload}, f.withDeviceMetadata(nil), nil, 0)
+	res, err := f.call(ctx, uriLocationUpdate, []any{payload}, f.withDeviceMetadata(nil), nil, 0)
 	if err != nil {
 		return nil, operationFailed("Device location update", err)
 	}

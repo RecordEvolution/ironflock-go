@@ -3,6 +3,8 @@ package ironflock
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -52,9 +54,27 @@ type fakeReg struct {
 	Removed   bool
 }
 
-// fakeConn is a recording wampConn. Every operation is captured with its
-// arguments; the hooks script results and errors (nil hooks succeed). It is
-// safe for concurrent use. Hooks are read under the lock and run outside it.
+// fakeConn is a recording wampConn that follows wamp.Connection's lifecycle
+// and errors:
+//
+//   - Configure fails after the first Start and after Stop.
+//   - Start fails with wamp.ErrNotConfigured before Configure, with
+//     wamp.ErrStopped after Stop, with an error while a Start is running or
+//     has succeeded, and with ctx's error when ctx is done already.
+//     Otherwise it runs startFn and joins when that returns nil. A failed
+//     Start may be called again, unless Stop ran meanwhile or the failure is
+//     a fatal *wamp.AuthError of a FailOnAuthError connection: then the
+//     connection is stopped for good.
+//   - Stop is final: IsOpen turns false at once, and stopFn may then block
+//     like the router's GOODBYE.
+//   - Operations fail with wamp.ErrNotConfigured before Configure and with
+//     wamp.ErrStopped after Stop; otherwise they wait for the join within
+//     their window (the default session wait when 0) and fail with an error
+//     wrapping wamp.ErrNotConnected when it passes.
+//
+// Operations are recorded with their arguments once they have a session;
+// the hooks script their results and errors (nil hooks succeed). It is safe
+// for concurrent use. Hooks are read under the lock and run outside it.
 type fakeConn struct {
 	mu sync.Mutex
 
@@ -62,8 +82,14 @@ type fakeConn struct {
 	configures int
 	starts     int
 	stops      int
-	started    bool
+	waits      []time.Duration // the timeouts of WaitSession calls
+	everStarts bool            // a Start got past its checks
+	starting   bool            // a Start is running or has succeeded
+	joined     bool            // the last Start succeeded
 	stopped    bool
+	fatal      *wamp.AuthError
+	up         chan struct{} // closed once joined
+	down       chan struct{} // closed by Stop
 
 	calls     []fakeCall
 	publishes []fakePublish
@@ -77,17 +103,47 @@ type fakeConn struct {
 	unsubscribeErr error
 	configureErr   error
 	startFn        func(ctx context.Context, cfg wamp.Config) error
+	stopFn         func(ctx context.Context) error // runs once IsOpen is false
 	stopErr        error
 }
 
 var _ wampConn = (*fakeConn)(nil)
 
+// errFakeAlreadyStarted stands in for wamp.Connection's (unexported) error
+// for a second Start.
+var errFakeAlreadyStarted = errors.New("wamp: connection already started")
+
+// chans returns the join and stop channels, creating them on first use.
+// c.mu must be held.
+func (c *fakeConn) chans() (up, down chan struct{}) {
+	if c.up == nil {
+		c.up, c.down = make(chan struct{}), make(chan struct{})
+	}
+	return c.up, c.down
+}
+
+// stoppedErrLocked is wamp.Connection's error after Stop. c.mu must be held.
+func (c *fakeConn) stoppedErrLocked() error {
+	if c.fatal != nil {
+		return fmt.Errorf("%w: %w", wamp.ErrStopped, c.fatal)
+	}
+	return wamp.ErrStopped
+}
+
 func (c *fakeConn) Configure(cfg wamp.Config) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.configures++
-	if c.configureErr != nil {
+	switch {
+	case c.stopped:
+		return c.stoppedErrLocked()
+	case c.everStarts:
+		return errors.New("wamp: Configure called after Start")
+	case c.configureErr != nil:
 		return c.configureErr
+	}
+	if cfg.Realm == "" {
+		cfg.Realm = wamp.RealmName(cfg.SwarmKey, cfg.AppKey, cfg.Stage)
 	}
 	c.cfg = &cfg
 	return nil
@@ -96,35 +152,71 @@ func (c *fakeConn) Configure(cfg wamp.Config) error {
 func (c *fakeConn) Start(ctx context.Context) error {
 	c.mu.Lock()
 	c.starts++
-	fn := c.startFn
-	var cfg wamp.Config
-	if c.cfg != nil {
-		cfg = *c.cfg
+	switch {
+	case c.cfg == nil:
+		c.mu.Unlock()
+		return wamp.ErrNotConfigured
+	case c.stopped:
+		err := c.stoppedErrLocked()
+		c.mu.Unlock()
+		return err
+	case c.starting:
+		c.mu.Unlock()
+		return errFakeAlreadyStarted
 	}
+	c.everStarts, c.starting = true, true
+	fn, cfg := c.startFn, *c.cfg
 	c.mu.Unlock()
-	if fn != nil {
-		if err := fn(ctx, cfg); err != nil {
-			return err
-		}
+
+	err := ctx.Err() // no join can win against a context that is done already
+	if err != nil {
+		err = fmt.Errorf("wamp: no session on realm %s: %w", cfg.Realm, err)
+	} else if fn != nil {
+		err = fn(ctx, cfg)
 	}
 	c.mu.Lock()
-	c.started = true
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if err == nil && c.stopped {
+		err = c.stoppedErrLocked() // Stop ended the Start first
+	}
+	if err != nil {
+		var aerr *wamp.AuthError
+		if cfg.FailOnAuthError && errors.As(err, &aerr) && !c.stopped {
+			_, down := c.chans()
+			c.stopped, c.fatal = true, aerr
+			close(down)
+		}
+		if !c.stopped {
+			c.starting = false // may be started again
+		}
+		return err
+	}
+	up, _ := c.chans()
+	c.joined = true
+	close(up)
 	return nil
 }
 
 func (c *fakeConn) Stop(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.stops++
-	c.stopped = true
-	return c.stopErr
+	if !c.stopped {
+		_, down := c.chans()
+		c.stopped = true
+		close(down)
+	}
+	fn, err := c.stopFn, c.stopErr
+	c.mu.Unlock()
+	if fn != nil {
+		return fn(ctx)
+	}
+	return err
 }
 
 func (c *fakeConn) IsOpen() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.started && !c.stopped
+	return c.joined && !c.stopped
 }
 
 func (c *fakeConn) URL() string {
@@ -136,7 +228,58 @@ func (c *fakeConn) URL() string {
 	return c.cfg.URL
 }
 
+// WaitSession waits for the join as wamp.Connection.WaitSession does.
+func (c *fakeConn) WaitSession(ctx context.Context, timeout time.Duration) error {
+	c.mu.Lock()
+	c.waits = append(c.waits, timeout)
+	c.mu.Unlock()
+	return c.session(ctx, timeout)
+}
+
+// session waits for the join, at most window (0: the default session wait).
+func (c *fakeConn) session(ctx context.Context, window time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if window <= 0 {
+		window = wamp.DefaultSessionWaitTimeout
+	}
+	var timer *time.Timer
+	for {
+		c.mu.Lock()
+		switch {
+		case c.cfg == nil:
+			c.mu.Unlock()
+			return wamp.ErrNotConfigured
+		case c.stopped:
+			err := c.stoppedErrLocked()
+			c.mu.Unlock()
+			return err
+		case c.joined:
+			c.mu.Unlock()
+			return nil
+		}
+		up, down := c.chans()
+		c.mu.Unlock()
+		if timer == nil {
+			timer = time.NewTimer(window)
+			defer timer.Stop()
+		}
+		select {
+		case <-up:
+		case <-down:
+		case <-timer.C:
+			return fmt.Errorf("fake: no session after %v: %w", window, wamp.ErrNotConnected)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (c *fakeConn) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *wamp.CallOptions, retryWindow time.Duration) (*wamp.Result, error) {
+	if err := c.session(ctx, retryWindow); err != nil {
+		return nil, err
+	}
 	call := fakeCall{Procedure: procedure, Args: args, Kwargs: kwargs, Opts: opts, Window: retryWindow}
 	c.mu.Lock()
 	c.calls = append(c.calls, call)
@@ -149,6 +292,9 @@ func (c *fakeConn) Call(ctx context.Context, procedure string, args []any, kwarg
 }
 
 func (c *fakeConn) Publish(ctx context.Context, topic string, args []any, kwargs map[string]any, opts *wamp.PublishOptions, waitWindow time.Duration) error {
+	if err := c.session(ctx, waitWindow); err != nil {
+		return err
+	}
 	pub := fakePublish{Topic: topic, Args: args, Kwargs: kwargs, Opts: opts, Window: waitWindow}
 	c.mu.Lock()
 	c.publishes = append(c.publishes, pub)
@@ -161,6 +307,9 @@ func (c *fakeConn) Publish(ctx context.Context, topic string, args []any, kwargs
 }
 
 func (c *fakeConn) Subscribe(ctx context.Context, topic string, handler wamp.EventHandler, opts *wamp.SubscribeOptions) (*wamp.Subscription, error) {
+	if err := c.session(ctx, 0); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	fn := c.subscribeFn
 	c.mu.Unlock()
@@ -188,6 +337,9 @@ func (c *fakeConn) Unsubscribe(ctx context.Context, sub *wamp.Subscription) erro
 }
 
 func (c *fakeConn) Register(ctx context.Context, procedure string, handler wamp.InvocationHandler, opts *wamp.RegisterOptions) (*wamp.Registration, error) {
+	if err := c.session(ctx, 0); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	fn := c.registerFn
 	c.mu.Unlock()
@@ -399,7 +551,9 @@ func unsetEnv(t *testing.T, names ...string) {
 	t.Helper()
 	for _, name := range names {
 		t.Setenv(name, "") // restores the original value after the test
-		os.Unsetenv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -432,8 +586,8 @@ type testFlock struct {
 }
 
 // newTestFlock builds an IronFlock from the current environment and opts,
-// with a fake own connection and fake consumed-app connections. It is
-// stopped when the test ends.
+// with a fake own connection and fake consumed-app connections. It is not
+// started, and it is stopped when the test ends.
 func newTestFlock(t *testing.T, opts ...Option) *testFlock {
 	t.Helper()
 	log, logs := newTestLogger()
@@ -453,11 +607,27 @@ func newTestFlock(t *testing.T, opts ...Option) *testFlock {
 	return &testFlock{IronFlock: f, own: own, factory: factory, logs: logs}
 }
 
-// flock is newTestFlock with the standard identity environment.
-func flock(t *testing.T, opts ...Option) *testFlock {
+// unstartedFlock is newTestFlock with the standard identity environment.
+func unstartedFlock(t *testing.T, opts ...Option) *testFlock {
 	t.Helper()
 	setIdentityEnv(t)
 	return newTestFlock(t, opts...)
+}
+
+// flock is unstartedFlock, started.
+func flock(t *testing.T, opts ...Option) *testFlock {
+	t.Helper()
+	f := unstartedFlock(t, opts...)
+	f.start(t)
+	return f
+}
+
+// start starts tf, failing the test if Start fails.
+func (tf *testFlock) start(t *testing.T) {
+	t.Helper()
+	if err := tf.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 }
 
 // resultOf returns a call result whose single positional value is v.
@@ -500,6 +670,19 @@ func checkGoroutines(t *testing.T) {
 }
 
 var signalLoopOnce sync.Once
+
+// recv waits up to 5 s for a value from ch.
+func recv[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	var zero T
+	return zero
+}
 
 // eventually polls cond until it holds or a second passes.
 func eventually(t *testing.T, what string, cond func() bool) {

@@ -24,6 +24,12 @@ func TestOperationErrorMessages(t *testing.T) {
 			"Device location update failed: not connected"},
 		{&OperationError{Op: "getHistory('t')", Err: errors.New("x"), hint: "the hint"},
 			"getHistory('t') failed: the hint"},
+		// The detail is compact JSON as JavaScript's JSON.stringify and
+		// Python's json.dumps write it: <, > and & are not escaped.
+		{&OperationError{Op: "Publish to topic 'x'", Err: wampErr("wamp.error.invalid_argument", "a<b && c>d")},
+			`Publish to topic 'x' failed with WAMP error 'wamp.error.invalid_argument' — ["a<b && c>d"]`},
+		{&OperationError{Op: "Call of procedure 'p'", Err: wampErr("app.error", map[string]any{"q": "x<1"})},
+			`Call of procedure 'p' failed with WAMP error 'app.error' — [{"q":"x<1"}]`},
 	}
 	for _, tc := range cases {
 		if got := tc.err.Error(); got != tc.want {
@@ -84,6 +90,9 @@ func TestMapCrossAppError(t *testing.T) {
 		{wampErr("sys.appaccess.error.unknown_app", "nope"), CodeUnknownApp, `sys.appaccess.error.unknown_app: "nope"`},
 		{wampErr("wamp.error.authorization_failed", map[string]any{"a": int64(1)}, "x"), CodeNotAuthorized, `wamp.error.authorization_failed: {"a":1}`},
 		{fmt.Errorf("ctx: %w", wampErr("sys.appaccess.error.provider_not_installed")), CodeProviderNotInstalled, "sys.appaccess.error.provider_not_installed"},
+		// No HTML escaping, as in the Python and JavaScript SDKs.
+		{wampErr("sys.appaccess.error.no_grant", "app <weather> & co"), CodeNoGrant, `sys.appaccess.error.no_grant: "app <weather> & co"`},
+		{wampErr("wamp.error.not_authorized", map[string]any{"q": "x<1"}), CodeNotAuthorized, `wamp.error.not_authorized: {"q":"x<1"}`},
 	}
 	for _, tc := range cases {
 		got := mapCrossAppError(tc.err)

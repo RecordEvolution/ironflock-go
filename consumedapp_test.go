@@ -3,6 +3,7 @@ package ironflock
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -148,6 +149,15 @@ func denyAuth(appKey int, reason string) func(c *fakeConn) {
 	}
 }
 
+// assertCrossAppError fails the test unless err is a *CrossAppAccessError
+// with code.
+func assertCrossAppError(t *testing.T, err error, code string) {
+	t.Helper()
+	_ = asCrossAppError(t, err, code)
+}
+
+// asCrossAppError returns err as a *CrossAppAccessError, failing the test
+// unless it is one with code.
 func asCrossAppError(t *testing.T, err error, code string) *CrossAppAccessError {
 	t.Helper()
 	var cerr *CrossAppAccessError
@@ -262,11 +272,11 @@ func TestConnectToAppDefaultsToTheOwnStage(t *testing.T) {
 }
 
 func TestConsumedConnectionURLAndCredentials(t *testing.T) {
-	// Not started: the own connection has no URL yet.
+	// The URL of the own connection (here from RESWARM_URL), and the
+	// explicit credential.
 	setIdentityEnv(t)
 	t.Setenv("RESWARM_URL", "http://localhost:8086")
-	c := &consumer{testFlock: newTestFlock(t, WithCredentials("app-id", "app-secret")), resolve: resolveResult()}
-	c.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(resolveResult()), nil }
+	c := consumerOf(t, newTestFlock(t, WithCredentials("app-id", "app-secret")))
 	if _, err := c.ConnectToApp(bg, "weatherstation"); err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +459,7 @@ func TestFailedAttemptsAreEvictedBeforeWaitersWake(t *testing.T) {
 	c := newConsumer(t)
 	c.failResolve(wampErr("sys.appaccess.error.no_grant"))
 	_, err := c.ConnectToApp(bg, "weatherstation")
-	asCrossAppError(t, err, CodeNoGrant)
+	assertCrossAppError(t, err, CodeNoGrant)
 	if len(c.cached()) != 0 {
 		t.Fatal("the failed attempt is still cached when its caller returns")
 	}
@@ -546,13 +556,96 @@ func TestStopClosesEveryConsumedAppAndTheOwnConnection(t *testing.T) {
 	mustContain(t, c.logs.String(), "Failed to close consumed app 'weatherstation'", "router gone")
 }
 
+// An attempt Stop aborts fails with an error wrapping wamp.ErrStopped, not
+// with the context.Canceled of the cancellation behind it: the caller's
+// context was never cancelled.
 func TestStopAbortsAttemptsInFlight(t *testing.T) {
+	checkGoroutines(t)
+	for name, abort := range map[string]func(c *consumer){
+		"while joining": func(c *consumer) {
+			c.factory.setSetup(func(fc *fakeConn) {
+				fc.startFn = func(ctx context.Context, cfg wamp.Config) error {
+					<-ctx.Done() // a realm that never appears
+					return fmt.Errorf("wamp: no session on realm %s: %w", cfg.Realm, ctx.Err())
+				}
+			})
+		},
+		"while resolving": func(c *consumer) {
+			c.own.mu.Lock()
+			answer := c.own.callFn
+			c.own.callFn = func(call fakeCall) (*wamp.Result, error) {
+				if call.Procedure == uriAppAccessResolve {
+					<-c.lifetime.Done() // the call's context, cancelled by Stop
+					return nil, context.Canceled
+				}
+				return answer(call)
+			}
+			c.own.mu.Unlock()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newConsumer(t)
+			abort(c)
+			errc := make(chan error, 1)
+			go func() {
+				_, err := c.ConnectToApp(bg, "weatherstation")
+				errc <- err
+			}()
+			eventually(t, "the attempt", func() bool {
+				return len(c.factory.all()) == 1 || len(c.own.callsTo(uriAppAccessResolve)) == 1
+			})
+			if err := c.Stop(bg); err != nil {
+				t.Fatal(err)
+			}
+			err := recv(t, errc, "ConnectToApp")
+			if !errors.Is(err, wamp.ErrStopped) || errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want ErrStopped and not context.Canceled", err)
+			}
+			mustContain(t, err.Error(), "connection to app 'weatherstation' (dev) aborted by Stop")
+			for _, conn := range c.factory.all() {
+				if conn.stopCount() == 0 {
+					t.Error("the aborted connection was not stopped")
+				}
+			}
+			if len(c.cached()) != 0 {
+				t.Error("the aborted attempt is cached")
+			}
+		})
+	}
+}
+
+func TestStopAbortsConnectToAllApps(t *testing.T) {
 	checkGoroutines(t)
 	c := newConsumer(t)
 	c.factory.setSetup(func(fc *fakeConn) {
-		fc.startFn = func(ctx context.Context, _ wamp.Config) error {
-			<-ctx.Done() // a realm that never appears
-			return ctx.Err()
+		fc.startFn = func(ctx context.Context, cfg wamp.Config) error {
+			<-ctx.Done()
+			return fmt.Errorf("wamp: no session on realm %s: %w", cfg.Realm, ctx.Err())
+		}
+	})
+	errc := make(chan error, 1)
+	go func() {
+		_, err := c.ConnectToAllApps(bg, ConnectToAllAppsOptions{StopOnError: true})
+		errc <- err
+	}()
+	eventually(t, "the attempts", func() bool { return len(c.factory.all()) == 2 })
+	if err := c.Stop(bg); err != nil {
+		t.Fatal(err)
+	}
+	if err := recv(t, errc, "ConnectToAllApps"); !errors.Is(err, wamp.ErrStopped) || errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want ErrStopped and not context.Canceled", err)
+	}
+}
+
+// A denial that races Stop is still reported as the denial.
+func TestDenialRacingStopKeepsItsCode(t *testing.T) {
+	checkGoroutines(t)
+	c := newConsumer(t)
+	c.factory.setSetup(func(fc *fakeConn) {
+		fc.startFn = func(ctx context.Context, cfg wamp.Config) error {
+			<-ctx.Done() // Stop has begun
+			cfg.OnAuthFailure("wamp.error.not_authorized")
+			return &wamp.AuthError{Realm: cfg.Realm, Reason: "wamp.error.not_authorized"}
 		}
 	})
 	errc := make(chan error, 1)
@@ -564,11 +657,81 @@ func TestStopAbortsAttemptsInFlight(t *testing.T) {
 	if err := c.Stop(bg); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-errc; err == nil {
-		t.Fatal("ConnectToApp succeeded after Stop")
+	cerr := asCrossAppError(t, recv(t, errc, "ConnectToApp"), CodeNotAuthorized)
+	if errors.Is(cerr, wamp.ErrStopped) {
+		t.Errorf("the denial was rewritten: %v", cerr)
 	}
-	if c.factory.all()[0].stopCount() == 0 {
-		t.Error("the aborted connection was not stopped")
+}
+
+// Stop with an expired context still closes a consumed connection whose
+// open completes at the same time: the open publishes its outcome under the
+// lock Stop takes its snapshot under, so either the snapshot holds the
+// published handle, which Stop closes, or the open sees Stop and closes it.
+func TestStopWithAnExpiredContextClosesAnOpenCompletingMeanwhile(t *testing.T) {
+	checkGoroutines(t)
+	c := newConsumer(t)
+	expired, cancel := context.WithCancel(bg)
+	cancel()
+	stopped := make(chan struct{})
+	c.afterOpenSettled = func() {
+		_ = c.Stop(expired)
+		close(stopped)
+	}
+	app, err := c.ConnectToApp(bg, "weatherstation")
+	if app == nil && !errors.Is(err, wamp.ErrStopped) {
+		t.Fatalf("ConnectToApp = %v, %v", app, err)
+	}
+	recv(t, stopped, "Stop")
+	conn := c.factory.all()[0]
+	if conn.stopCount() != 1 || conn.IsOpen() {
+		t.Errorf("the consumed connection outlived Stop: stopped %d times, open %v", conn.stopCount(), conn.IsOpen())
+	}
+	_ = c.Stop(bg)
+	if conn.stopCount() != 1 {
+		t.Errorf("stopped %d times", conn.stopCount())
+	}
+}
+
+// Close drops the handle from the cache before it stops the connection: a
+// ConnectToApp that comes in while the connection is still saying goodbye
+// opens a fresh one instead of getting the handle being closed.
+func TestCloseEvictsBeforeStopping(t *testing.T) {
+	checkGoroutines(t)
+	c := newConsumer(t)
+	first, err := c.ConnectToApp(bg, "weatherstation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := c.factory.all()[0]
+	entered, goodbye := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(goodbye) })
+	t.Cleanup(release) // before the Stop of the cleanup, should the test fail
+	enter := sync.OnceFunc(func() { close(entered) })
+	conn.mu.Lock()
+	conn.stopFn = func(context.Context) error {
+		enter()
+		<-goodbye // the GOODBYE round trip
+		return nil
+	}
+	conn.mu.Unlock()
+	closed := make(chan error, 1)
+	go func() { closed <- first.Close(bg) }()
+	recv(t, entered, "Close to stop the connection")
+
+	second, err := c.ConnectToApp(bg, "weatherstation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first || !second.IsConnected() || len(c.factory.all()) != 2 {
+		t.Fatalf("ConnectToApp during Close: same handle %v, connected %v, %d connections",
+			second == first, second.IsConnected(), len(c.factory.all()))
+	}
+	release()
+	if err := recv(t, closed, "Close"); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := c.ConnectToApp(bg, "weatherstation"); err != nil || again != second {
+		t.Errorf("the new handle was not kept: %v", err)
 	}
 }
 
@@ -778,7 +941,7 @@ func TestConsumedAppCatalogGuard(t *testing.T) {
 		t.Errorf("message %q\nwant %q", cerr.Message, want)
 	}
 	_, err = app.SubscribeToTable(bg, "secret", func(*Event) {})
-	asCrossAppError(t, err, CodePrivateTable)
+	assertCrossAppError(t, err, CodePrivateTable)
 	_, err = app.GetSeriesHistory(bg, "secret", SeriesQueryParams{Metrics: []string{"temp"}, Method: MethodAvg, Limit: 10, TimeRange: &TimeRange{}})
 	cerr = asCrossAppError(t, err, CodePrivateTable)
 	if want := "'secret' is not a shared table of app 'weatherstation' (dev). Available tables: readings"; cerr.Message != want {
@@ -786,7 +949,7 @@ func TestConsumedAppCatalogGuard(t *testing.T) {
 	}
 	// Matching is exact.
 	_, err = app.GetHistory(bg, "Readings", nil)
-	asCrossAppError(t, err, CodePrivateTable)
+	assertCrossAppError(t, err, CodePrivateTable)
 
 	conn := c.factory.all()[0]
 	if len(conn.allCalls())+len(conn.allSubs()) != 0 {
@@ -913,9 +1076,9 @@ func TestConsumedAppMapsProviderRefusals(t *testing.T) {
 
 	fail(conn, wampErr("wamp.error.not_authorized"))
 	_, err = app.GetHistory(bg, "readings", nil)
-	asCrossAppError(t, err, CodeNotAuthorized)
+	assertCrossAppError(t, err, CodeNotAuthorized)
 	_, err = app.GetSeriesHistory(bg, "readings", series)
-	asCrossAppError(t, err, CodeNotAuthorized)
+	assertCrossAppError(t, err, CodeNotAuthorized)
 
 	fail(conn, wampErr("wamp.error.runtime_error", "boom"))
 	_, err = app.GetHistory(bg, "readings", nil)
@@ -956,8 +1119,11 @@ func TestConsumedAppSubscribeToTable(t *testing.T) {
 	}
 	subs := conn.allSubs()
 	if len(subs) != 2 || subs[0].Topic != "transformed.readings" || subs[1].Topic != "transformed.bulk.readings" ||
-		!reflect.DeepEqual(subs[1].Opts, &opts) {
+		!reflect.DeepEqual(subs[1].Opts.Extra, opts.Extra) {
 		t.Fatalf("subscriptions %#v", subs)
+	}
+	if subs[0].Opts.Group == nil || subs[0].Opts.Group != subs[1].Opts.Group {
+		t.Error("the feeds do not deliver through one DeliveryGroup")
 	}
 	if len(c.own.allSubs()) != 0 {
 		t.Error("subscribed on the own realm")
@@ -1038,7 +1204,7 @@ func TestListConsumableAppsErrors(t *testing.T) {
 	c.listErr = wampErr("sys.appaccess.error.no_grant", "denied")
 	c.mu.Unlock()
 	_, err := c.ListConsumableApps(bg)
-	asCrossAppError(t, err, CodeNoGrant)
+	assertCrossAppError(t, err, CodeNoGrant)
 
 	c.mu.Lock()
 	c.listErr = wampErr("wamp.error.runtime_error", "boom")
@@ -1168,7 +1334,7 @@ func TestConnectToAllAppsReportsFailedProviders(t *testing.T) {
 	if len(reported) != 1 {
 		t.Fatalf("reported %v", reported)
 	}
-	asCrossAppError(t, reported[0], CodeNotAuthorized)
+	assertCrossAppError(t, reported[0], CodeNotAuthorized)
 }
 
 func TestConnectToAllAppsStopOnError(t *testing.T) {
@@ -1199,7 +1365,7 @@ func TestConnectToAllAppsStopOnError(t *testing.T) {
 	c2 := newConsumer(t)
 	c2.factory.setSetup(denyAuth(88, "wamp.error.not_authorized"))
 	_, err = c2.ConnectToAllApps(bg, ConnectToAllAppsOptions{StopOnError: true})
-	asCrossAppError(t, err, CodeNotAuthorized)
+	assertCrossAppError(t, err, CodeNotAuthorized)
 	if _, err := c2.ConnectToApp(bg, "weatherstation"); err != nil || len(c2.factory.all()) != 2 {
 		t.Errorf("the opened provider was not kept: %v", err)
 	}
@@ -1231,7 +1397,7 @@ func TestConnectToAllAppsReportsLaterRevocations(t *testing.T) {
 	c.factory.connFor(t, 88).config().OnAuthFailure("wamp.error.not_authorized")
 	select {
 	case err := <-reported:
-		asCrossAppError(t, err, CodeNotAuthorized)
+		assertCrossAppError(t, err, CodeNotAuthorized)
 		mustContain(t, err.Error(), "Access to app 'vibration' (dev) denied")
 	case <-time.After(time.Second):
 		t.Fatal("revocation not reported")
@@ -1244,7 +1410,7 @@ func TestConnectToAllAppsPropagatesListErrors(t *testing.T) {
 	c.listErr = wampErr("sys.appaccess.error.no_grant")
 	c.mu.Unlock()
 	_, err := c.ConnectToAllApps(bg)
-	asCrossAppError(t, err, CodeNoGrant)
+	assertCrossAppError(t, err, CodeNoGrant)
 	if len(c.factory.all()) != 0 {
 		t.Error("connections were opened")
 	}

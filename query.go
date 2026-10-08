@@ -54,10 +54,26 @@ var downSampleMethods = []DownSampleMethod{
 	MethodAvg, MethodSum, MethodCount, MethodMin, MethodMax, MethodFirst, MethodLast,
 }
 
-// TimeRange is the [start, end] range of a query. Each bound is an ISO-8601
-// date-time string, a time.Time (sent as an RFC 3339 UTC string), an integer
-// epoch-milliseconds number, or nil for an open end. Strings and numbers
-// cannot be mixed in one range.
+// TimeRange is the [start, end] range of a query. Each bound is a date-time
+// string, a time.Time, an epoch-milliseconds number, or nil for an open end.
+// Strings and times cannot be mixed with numbers in one range.
+//
+// A string is sent exactly as given. The data backend reads it with
+// JavaScript's Date, so it must be an ISO 8601 date or date-time in extended
+// format that Date reads as the time it denotes: a date (2026, 2026-07 or
+// 2026-07-01), or a date and a time of day (2026-07-01T12:30,
+// 2026-07-01T12:30:15 or 2026-07-01T12:30:15.250, the fraction of any length)
+// separated by T, t or a space and optionally followed by Z or a UTC offset
+// (+02:00 or +0200). A date-time without one is read as UTC. Years outside
+// 0000-9999 take six digits and a sign (+010000). Strings Date would read as
+// another time or not at all are rejected with ErrInvalidArgument, among them
+// basic format (20260701T123000Z), hours without minutes, offsets of hours
+// only and days a month does not have (2026-02-30). Fractions of a
+// millisecond are dropped.
+//
+// A time.Time is sent as RFC 3339 in UTC, with the six-digit year outside
+// 0000-9999 (as JavaScript's Date.toISOString writes it); one outside the
+// range of Date (-271821-04-20 to +275760-09-13) is rejected.
 type TimeRange struct {
 	Start any
 	End   any
@@ -383,25 +399,240 @@ func isSlice(v any) bool {
 	return k == reflect.Slice || k == reflect.Array
 }
 
-// isoLayouts are the date-time forms accepted in a TimeRange, mirroring
-// Python's datetime.fromisoformat.
-var isoLayouts = []string{
-	time.RFC3339Nano,
-	"2006-01-02T15:04:05.999999999",
-	"2006-01-02 15:04:05.999999999Z07:00",
-	"2006-01-02 15:04:05.999999999",
-	"2006-01-02T15:04Z07:00",
-	"2006-01-02T15:04",
-	"2006-01-02",
-}
+// The data backend turns each string bound of a TimeRange into a time with
+// JavaScript's Date (new Date(s).getTime()), which holds times up to
+// maxDateTime ms before or after the epoch (±100,000,000 days).
+const (
+	maxDateTime = 8_640_000_000_000_000
+	// minDateYear and maxDateYear are the years of the earliest and the
+	// latest time a Date holds.
+	minDateYear = -271821
+	maxDateYear = 275760
+)
 
-func parseISO(s string) bool {
-	for _, layout := range isoLayouts {
-		if _, err := time.Parse(layout, s); err == nil {
-			return true
+// isoTime reads s, a TimeRange string, as the data backend's JavaScript Date
+// does, and returns its time value: ms since the epoch, fractions of a
+// millisecond dropped. ok is false unless s is an ISO 8601 date or date-time
+// in extended format that Date reads as the time it denotes:
+//
+//	date      = year ["-" month ["-" day]]
+//	date-time = year "-" month "-" day ("T" | "t" | " ") time [zone]
+//	time      = hour ":" minute [":" second ["." digit+]]
+//	zone      = "Z" | "z" | ("+" | "-") hour [":"] minute
+//
+// A year is four digits, or six with a sign as Date.toISOString writes years
+// outside 0000-9999 (but never "-000000"); the result must lie within Date's
+// range. Days must exist in their month, and hours, minutes and seconds lie
+// in 00-23, 00-59 and 00-59, except for 24:00, 24:00:00 and 24:00:00.0…, the
+// end of the day. A time without a zone is read as UTC, the data backend's
+// time zone. Date reads more than this, but not correctly: it moves a day a
+// month does not have into the next month (2026-02-30 is 2026-03-02), and
+// fails on hours without minutes, offsets of hours only, basic format,
+// commas and week or ordinal dates. What it reads besides that (2026-1-1,
+// an offset after a date) is not ISO 8601.
+func isoTime(s string) (ms int64, ok bool) {
+	p := isoScanner{s: s}
+	year, ok := p.year()
+	if !ok {
+		return 0, false
+	}
+	month, day := int64(1), int64(1)
+	var hour, minute, second, milli, offset int64
+	if p.skip('-') {
+		if month, ok = p.number(2, 1, 12); !ok {
+			return 0, false
+		}
+		if p.skip('-') {
+			if day, ok = p.number(2, 1, daysIn(year, month)); !ok {
+				return 0, false
+			}
+			if p.skip('T') || p.skip('t') || p.skip(' ') {
+				if hour, minute, second, milli, ok = p.clock(); !ok {
+					return 0, false
+				}
+				if offset, ok = p.zone(); !ok {
+					return 0, false
+				}
+			}
 		}
 	}
+	if p.i != len(s) {
+		return 0, false
+	}
+	ms = daysFromCivil(year, month, day)*86_400_000 +
+		hour*3_600_000 + minute*60_000 + second*1000 + milli - offset*60_000
+	if ms < -maxDateTime || ms > maxDateTime {
+		return 0, false
+	}
+	return ms, true
+}
+
+// isoScanner reads the fields of an ISO 8601 string left to right.
+type isoScanner struct {
+	s string
+	i int
+}
+
+// skip consumes c if it comes next.
+func (p *isoScanner) skip(c byte) bool {
+	if p.i < len(p.s) && p.s[p.i] == c {
+		p.i++
+		return true
+	}
 	return false
+}
+
+// digits consumes exactly n ASCII digits and returns their value.
+func (p *isoScanner) digits(n int) (int64, bool) {
+	if len(p.s)-p.i < n {
+		return 0, false
+	}
+	var v int64
+	for _, c := range []byte(p.s[p.i : p.i+n]) {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		v = v*10 + int64(c-'0')
+	}
+	p.i += n
+	return v, true
+}
+
+// number consumes an n-digit number within [lo, hi].
+func (p *isoScanner) number(n int, lo, hi int64) (int64, bool) {
+	v, ok := p.digits(n)
+	return v, ok && v >= lo && v <= hi
+}
+
+// year consumes a four-digit year, or a six-digit one with a sign.
+func (p *isoScanner) year() (int64, bool) {
+	sign := int64(1)
+	switch {
+	case p.skip('+'):
+	case p.skip('-'):
+		sign = -1
+	default:
+		return p.digits(4)
+	}
+	y, ok := p.digits(6)
+	if !ok || (sign < 0 && y == 0) {
+		return 0, false
+	}
+	return sign * y, true
+}
+
+// clock consumes the time of day: hh:mm, hh:mm:ss or hh:mm:ss.fraction.
+// Digits of the fraction beyond milliseconds are dropped, as Date drops them.
+func (p *isoScanner) clock() (hour, minute, second, milli int64, ok bool) {
+	if hour, ok = p.number(2, 0, 24); !ok || !p.skip(':') {
+		return 0, 0, 0, 0, false
+	}
+	if minute, ok = p.number(2, 0, 59); !ok {
+		return 0, 0, 0, 0, false
+	}
+	fraction := false // a fraction with a digit other than 0
+	if p.skip(':') {
+		if second, ok = p.number(2, 0, 59); !ok {
+			return 0, 0, 0, 0, false
+		}
+		if p.skip('.') {
+			n := 0 // digits of the fraction
+			for ; p.i < len(p.s) && p.s[p.i] >= '0' && p.s[p.i] <= '9'; p.i++ {
+				if n < 3 {
+					milli = milli*10 + int64(p.s[p.i]-'0')
+				}
+				fraction = fraction || p.s[p.i] != '0'
+				n++
+			}
+			if n == 0 {
+				return 0, 0, 0, 0, false
+			}
+			for ; n < 3; n++ {
+				milli *= 10 // ".5" is 500 ms
+			}
+		}
+	}
+	if hour == 24 && (minute != 0 || second != 0 || fraction) {
+		return 0, 0, 0, 0, false // only 24:00 itself ends the day
+	}
+	return hour, minute, second, milli, true
+}
+
+// zone consumes an optional zone designator and returns its offset from UTC
+// in minutes: Z, z, ±hh:mm or ±hhmm; none is UTC.
+func (p *isoScanner) zone() (int64, bool) {
+	sign := int64(1)
+	switch {
+	case p.skip('Z'), p.skip('z'), p.i == len(p.s):
+		return 0, true
+	case p.skip('+'):
+	case p.skip('-'):
+		sign = -1
+	default:
+		return 0, false
+	}
+	hours, ok := p.number(2, 0, 23)
+	if !ok {
+		return 0, false
+	}
+	p.skip(':')
+	minutes, ok := p.number(2, 0, 59)
+	if !ok {
+		return 0, false
+	}
+	return sign * (hours*60 + minutes), true
+}
+
+// daysIn returns the number of days of month in year (proleptic Gregorian).
+func daysIn(year, month int64) int64 {
+	switch month {
+	case 2:
+		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+			return 29
+		}
+		return 28
+	case 4, 6, 9, 11:
+		return 30
+	}
+	return 31
+}
+
+// daysFromCivil returns the number of days from 1970-01-01 to the given date
+// of the proleptic Gregorian calendar (Howard Hinnant's days_from_civil).
+func daysFromCivil(year, month, day int64) int64 {
+	if month <= 2 {
+		year--
+	}
+	era := year / 400
+	if year < 0 && year%400 != 0 {
+		era-- // floor division
+	}
+	yoe := year - era*400                     // [0, 399]
+	doy := (153*((month+9)%12)+2)/5 + day - 1 // [0, 365], from March 1st
+	doe := yoe*365 + yoe/4 - yoe/100 + doy    // [0, 146096]
+	return era*146_097 + doe - 719_468
+}
+
+// timeBound formats a time.Time bound as the data backend reads it: RFC 3339
+// in UTC, and outside the years 0000-9999 with the six-digit signed year of
+// JavaScript's expanded format (as Date.toISOString writes it). A time
+// outside the range of JavaScript's Date is an error.
+func timeBound(t time.Time) (string, error) {
+	t = t.UTC()
+	year := t.Year()
+	if year >= 0 && year <= 9999 {
+		return t.Format(time.RFC3339Nano), nil
+	}
+	// Checking the year first keeps UnixMilli within int64.
+	if year < minDateYear || year > maxDateYear || t.UnixMilli() < -maxDateTime || t.UnixMilli() > maxDateTime {
+		return "", invalidf("timeRange bound %s is outside the range of times the data backend handles "+
+			"(-271821-04-20T00:00:00Z to +275760-09-13T00:00:00Z)", t.Format(time.RFC3339Nano))
+	}
+	sign := "+"
+	if year < 0 {
+		sign, year = "-", -year
+	}
+	return fmt.Sprintf("%s%06d%s", sign, year, t.Format("-01-02T15:04:05.999999999Z07:00")), nil
 }
 
 // timeRangeWire validates tr and returns the [start, end] pair.
@@ -414,20 +645,28 @@ func timeRangeWire(tr *TimeRange) ([]any, error) {
 		case nil:
 			out[i] = nil
 		case time.Time:
-			out[i] = v.UTC().Format(time.RFC3339Nano)
+			s, err := timeBound(v)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = s
 			hasStr = true
 		case *time.Time:
 			if v == nil {
 				out[i] = nil
 				continue
 			}
-			out[i] = v.UTC().Format(time.RFC3339Nano)
+			s, err := timeBound(*v)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = s
 			hasStr = true
 		case string:
-			if !parseISO(v) {
+			if _, ok := isoTime(v); !ok {
 				return nil, invalidf("Invalid ISO datetime format: %s", v)
 			}
-			out[i] = v
+			out[i] = v // as given, byte for byte
 			hasStr = true
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 			n, _ := normalize(v)

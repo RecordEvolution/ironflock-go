@@ -59,8 +59,8 @@ func (i *ConsumedAppInfo) Catalog(stage string) *StageCatalog {
 
 // ConnectToAppOptions configures ConnectToApp.
 type ConnectToAppOptions struct {
-	// Stage is the provider stage, "dev" or "prod" (default: this app's own
-	// stage).
+	// Stage is the provider stage, "dev" or "prod" in any case (default:
+	// this app's own stage, IronFlock.Stage().Lower()).
 	Stage string
 	// OnError is called (on its own goroutine) when the connection is
 	// fatally denied AFTER ConnectToApp returned — e.g. the grant was
@@ -76,8 +76,8 @@ type ConnectToAppOptions struct {
 
 // ConnectToAllAppsOptions configures ConnectToAllApps.
 type ConnectToAllAppsOptions struct {
-	// Stage is the provider stage, "dev" or "prod" (default: this app's own
-	// stage).
+	// Stage is the provider stage, "dev" or "prod" in any case (default:
+	// this app's own stage, IronFlock.Stage().Lower()).
 	Stage string
 	// OnError is called with the failure of each provider that could not be
 	// opened (unless StopOnError is set), and with a *CrossAppAccessError
@@ -346,8 +346,9 @@ func (a *ConsumedApp) SubscribeToTable(ctx context.Context, table string, handle
 // Close closes the connection to the provider. IronFlock.Stop closes all
 // consumed apps as well.
 //
-// Close also drops the handle from the cache, so a later ConnectToApp
-// opens a fresh connection. It is safe to call more than once.
+// Close first drops the handle from the cache, so a ConnectToApp from then
+// on opens a fresh connection (one that ran before Close may still have
+// returned this handle). It is safe to call more than once.
 func (a *ConsumedApp) Close(ctx context.Context) error {
 	if err := a.close(ctx); err != nil {
 		return &OperationError{Op: fmt.Sprintf("Close of the connection to app '%s' (%s)", a.App, a.Stage), Err: err}
@@ -355,15 +356,16 @@ func (a *ConsumedApp) Close(ctx context.Context) error {
 	return nil
 }
 
-// close stops the connection and drops the handle from the cache.
+// close drops the handle from the cache and then stops the connection: a
+// ConnectToApp that comes in while the connection is still saying goodbye
+// opens a fresh one instead of getting this one.
 func (a *ConsumedApp) close(ctx context.Context) error {
-	err := a.conn.Stop(ctx)
 	a.closeOnce.Do(func() {
 		if a.onClosed != nil {
 			a.onClosed()
 		}
 	})
-	return err
+	return a.conn.Stop(ctx)
 }
 
 // consumedStage resolves a cross-app stage option: empty selects the app's
@@ -380,10 +382,11 @@ func (f *IronFlock) consumedStage(stage string) (string, error) {
 }
 
 // ConnectToApp opens a read-only connection to another app's data backend in
-// the same project and returns a handle on it. The provider must list this
-// app in its data-template consumes: section and the project user must have
-// granted access. Handles are cached per app and stage: a second call
-// returns the same handle, and concurrent calls share one attempt.
+// the same project and returns a handle on it. This app must declare the
+// provider in its own data-template consumes: section (or hold the wildcard
+// consumes: [{app: "*"}]), and the project user must have granted access.
+// Handles are cached per app and stage: a second call returns the same
+// handle, and concurrent calls share one attempt.
 //
 // Errors: *CrossAppAccessError with NO_GRANT, PROVIDER_NOT_INSTALLED,
 // UNKNOWN_APP or NOT_AUTHORIZED.
@@ -391,7 +394,7 @@ func (f *IronFlock) consumedStage(stage string) (string, error) {
 // The attempt runs independently of ctx, which bounds only this caller's
 // wait: a caller that gives up does not fail the attempt for others sharing
 // it, and a completed attempt is cached for the next call. Stop aborts
-// attempts in flight.
+// attempts in flight; they fail with an error wrapping wamp.ErrStopped.
 func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...ConnectToAppOptions) (*ConsumedApp, error) {
 	if strings.TrimSpace(appName) == "" {
 		return nil, invalidf("appName must not be empty!")
@@ -407,10 +410,7 @@ func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...Co
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Lower-cased so the key matches those of ConnectToAllApps: the platform
-	// returns app names in lower case.
-	key := strings.ToLower(appName) + ":" + stage
-	entry, err := f.cachedOpen(key, func(ctx context.Context, evict func()) (*ConsumedApp, error) {
+	entry, err := f.cachedOpen(appName, stage, func(ctx context.Context, evict func()) (*ConsumedApp, error) {
 		return f.openConsumedApp(ctx, appName, stage, evict, o.OnError)
 	})
 	if err != nil {
@@ -425,7 +425,7 @@ func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...Co
 func (f *IronFlock) ListConsumableApps(ctx context.Context) ([]ConsumedAppInfo, error) {
 	// The platform derives the consumer from the realm the call arrives on
 	// and ignores the arguments.
-	res, err := f.conn.Call(ctx, uriAppAccessList, []any{}, nil, nil, 0)
+	res, err := f.call(ctx, uriAppAccessList, []any{}, nil, nil, 0)
 	if err != nil {
 		return nil, callFailed(fmt.Sprintf("Call of procedure '%s'", uriAppAccessList), err)
 	}
@@ -504,7 +504,7 @@ func (f *IronFlock) ConnectToAllApps(ctx context.Context, opts ...ConnectToAllAp
 			f.log.Warn(fmt.Sprintf("Skipping a provider without an app name (provider_app_key %d)", info.ProviderAppKey))
 			continue
 		}
-		entry, err := f.cachedOpen(strings.ToLower(info.App)+":"+stage,
+		entry, err := f.cachedOpen(info.App, stage,
 			func(ctx context.Context, evict func()) (*ConsumedApp, error) {
 				return f.openFromInfo(ctx, info, stage, evict, onDenied)
 			})
@@ -541,10 +541,14 @@ func (f *IronFlock) ConnectToAllApps(ctx context.Context, opts ...ConnectToAllAp
 	return opened, nil
 }
 
-// cachedOpen returns the cache entry of key, starting open in the background
-// when there is none. open runs on a context Stop cancels and receives the
-// function that evicts this entry (and only this entry) from the cache.
-func (f *IronFlock) cachedOpen(key string, open func(ctx context.Context, evict func()) (*ConsumedApp, error)) (*consumedEntry, error) {
+// cachedOpen returns the cache entry of app on stage, starting open in the
+// background when there is none. open runs on a context Stop cancels and
+// receives the function that evicts this entry (and only this entry) from
+// the cache.
+func (f *IronFlock) cachedOpen(app, stage string, open func(ctx context.Context, evict func()) (*ConsumedApp, error)) (*consumedEntry, error) {
+	// Lower-cased so that ConnectToApp and ConnectToAllApps share entries:
+	// the platform returns app names in lower case.
+	key := strings.ToLower(app) + ":" + stage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopped {
@@ -555,36 +559,54 @@ func (f *IronFlock) cachedOpen(key string, open func(ctx context.Context, evict 
 	}
 	e := &consumedEntry{done: make(chan struct{})}
 	f.consumed[key] = e
-	go f.runOpen(e, func() { f.evict(key, e) }, open)
+	go f.runOpen(e, app, stage, func() { f.evict(key, e) }, open)
 	return e, nil
 }
 
-// runOpen runs one consumed-app attempt and publishes its outcome on e. A
-// failed attempt is evicted before its waiters wake, so one that retries at
-// once starts a fresh attempt.
-func (f *IronFlock) runOpen(e *consumedEntry, evict func(), open func(ctx context.Context, evict func()) (*ConsumedApp, error)) {
-	app, err := open(f.openCtx, evict)
+// runOpen runs one attempt to open app on stage and publishes its outcome
+// on e. A failed attempt is evicted before its waiters wake, so one that
+// retries at once starts a fresh attempt.
+func (f *IronFlock) runOpen(e *consumedEntry, app, stage string, evict func(), open func(ctx context.Context, evict func()) (*ConsumedApp, error)) {
+	a, err := open(f.lifetime, evict)
 	if err == nil {
+		// Decide under the lock Stop takes its snapshot of the cache under:
+		// either the snapshot finds the outcome published, and Stop closes
+		// the connection, or this attempt finds Stop and closes it itself.
 		f.mu.Lock()
-		stopped := f.stopped
-		f.mu.Unlock()
-		if stopped {
-			// Stop ran while the attempt was in flight: do not hand out a
-			// connection nobody would close.
-			ctx, cancel := context.WithTimeout(context.Background(), f.cleanupTimeout)
-			if cerr := app.close(ctx); cerr != nil {
-				f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", app.App, cerr))
+		if !f.stopped {
+			e.app = a
+			close(e.done) // waiters do not take f.mu
+			f.mu.Unlock()
+			if h := f.afterOpenSettled; h != nil {
+				h()
 			}
-			cancel()
-			err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", app.App, app.Stage, wamp.ErrStopped)
-			app = nil
+			return
 		}
+		f.mu.Unlock()
+		// Do not hand out a connection nobody would close.
+		ctx, cancel := context.WithTimeout(context.Background(), f.cleanupTimeout)
+		if cerr := a.close(ctx); cerr != nil {
+			f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", a.App, cerr))
+		}
+		cancel()
+		err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", a.App, a.Stage, wamp.ErrStopped)
+	} else if abortedByStop(f.lifetime, err) {
+		// Reported as what it is: the caller's context was not cancelled.
+		err = fmt.Errorf("ironflock: connection to app '%s' (%s) aborted by Stop: %w", app, stage, wamp.ErrStopped)
 	}
-	if err != nil {
-		evict()
-	}
-	e.app, e.err = app, err
+	evict()
+	e.err = err
 	close(e.done)
+}
+
+// abortedByStop reports whether err is the failure of an open that Stop
+// aborted: a cancellation (lifetime is the open's context) or a stopped
+// connection once Stop has begun. A cross-app access denial keeps its code,
+// even when it races Stop.
+func abortedByStop(lifetime context.Context, err error) bool {
+	var cerr *CrossAppAccessError
+	return lifetime.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, wamp.ErrStopped)) &&
+		!errors.As(err, &cerr)
 }
 
 // evict removes e from the cache, if key still maps to it.
@@ -599,7 +621,7 @@ func (f *IronFlock) evict(key string, e *consumedEntry) {
 // openConsumedApp resolves a provider on the app's own realm and opens the
 // connection to its realm.
 func (f *IronFlock) openConsumedApp(ctx context.Context, appName, stage string, evict func(), onDenied func(*CrossAppAccessError)) (*ConsumedApp, error) {
-	res, err := f.conn.Call(ctx, uriAppAccessResolve, []any{map[string]any{"app": appName}}, nil, nil, 0)
+	res, err := f.call(ctx, uriAppAccessResolve, []any{map[string]any{"app": appName}}, nil, nil, 0)
 	if err != nil {
 		return nil, callFailed(fmt.Sprintf("Call of procedure '%s'", uriAppAccessResolve), err)
 	}
