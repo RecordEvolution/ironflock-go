@@ -9,12 +9,32 @@ Test hooks (on realm-2-26-dev):
   test.recorded()            -> list of {"kind", "uri", "args", "kwargs"}
   test.reset()               -> clears recordings and stored rows/files
   test.provider.publish(t, row, bulk=False) -> publishes on the provider realm
+  test.authz_log(clear=False) -> verdicts of the auth.authorize stub (below)
+
+Two variants, selected by environment (defaults = the Crossbar variant):
+
+  FAKE_PLATFORM_ROUTER         router URL for the data-realm sessions
+                               (default ws://localhost:18081/ws-ua-usr)
+  FAKE_PLATFORM_S3_PORT        fake object store port (default 18090)
+  FAKE_PLATFORM_AUTHID/SECRET  backend credential (fake-backend/fake-backend-secret)
+  FAKE_PLATFORM_OWN_REALM      default realm-2-26-dev
+  FAKE_PLATFORM_PROVIDER_REALM default realm-2-77-dev
+  FAKE_PLATFORM_AUTH_REALM     set (e.g. ironflock.auth) to also join that realm as
+                               a stub of ironflock-auth and register auth.authorize,
+                               the router's `identity` authorizer callout. Unset: no
+                               auth session (Crossbar has no callout).
+  FAKE_PLATFORM_AUTH_ROUTER    URL for that session (default FAKE_PLATFORM_ROUTER)
+  FAKE_PLATFORM_AUTH_AUTHID/SECRET  its credential (svc_auth/svc-auth-secret)
+  FAKE_PLATFORM_USERAPP_AUTH   1: also register auth.userapp.authenticate, the
+                               router's dynamic WAMP-CRA authenticator for app
+                               containers (per-realm role, production rule)
 """
 
 import asyncio
 import base64
 import json
 import os
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,10 +46,19 @@ from autobahn.wamp.types import RegisterOptions, SubscribeOptions, PublishOption
 
 URL = os.environ.get("FAKE_PLATFORM_ROUTER", "ws://localhost:18081/ws-ua-usr")
 S3_PORT = int(os.environ.get("FAKE_PLATFORM_S3_PORT", "18090"))
-AUTHID, SECRET = "fake-backend", "fake-backend-secret"
+AUTHID = os.environ.get("FAKE_PLATFORM_AUTHID", "fake-backend")
+SECRET = os.environ.get("FAKE_PLATFORM_SECRET", "fake-backend-secret")
 SWARM, APP = 2, 26
+OWN_REALM = os.environ.get("FAKE_PLATFORM_OWN_REALM", "realm-%d-%d-dev" % (SWARM, APP))
+PROVIDER_REALM = os.environ.get("FAKE_PLATFORM_PROVIDER_REALM", "realm-%d-77-dev" % SWARM)
+AUTH_REALM = os.environ.get("FAKE_PLATFORM_AUTH_REALM", "")
+AUTH_URL = os.environ.get("FAKE_PLATFORM_AUTH_ROUTER", URL)
+AUTH_AUTHID = os.environ.get("FAKE_PLATFORM_AUTH_AUTHID", "svc_auth")
+AUTH_SECRET = os.environ.get("FAKE_PLATFORM_AUTH_SECRET", "svc-auth-secret")
+USERAPP_AUTH = os.environ.get("FAKE_PLATFORM_USERAPP_AUTH", "") == "1"
 
 recorded = []
+authz_log = []  # auth.authorize verdicts; kept apart so test.recorded stays SDK-only
 rows = {}      # table -> list of rows
 files = {}     # (ns, key) -> {"data": bytes, "content_type": str}
 blobs = {}     # s3 path -> bytes
@@ -179,7 +208,7 @@ WEATHER = {
 def own_component():
     comp = Component(transports=[{"type": "websocket", "url": URL, "serializers": ["msgpack"],
                                   "max_retries": -1, "max_retry_delay": 2}],
-                     realm="realm-%d-%d-dev" % (SWARM, APP),
+                     realm=OWN_REALM,
                      authentication={"wampcra": {"authid": AUTHID, "secret": SECRET}})
 
     @comp.on_join
@@ -284,6 +313,13 @@ def own_component():
             recorded.clear()
             return True
 
+        def get_authz_log(clear=False):
+            out = list(authz_log)
+            if clear:
+                authz_log.clear()
+            return out
+
+        await session.register(get_authz_log, "test.authz_log")
         await session.register(clear_recorded, "test.clear_recorded")
         await session.register(get_recorded, "test.recorded")
         await session.register(reset, "test.reset")
@@ -296,7 +332,7 @@ def own_component():
 def provider_component():
     comp = Component(transports=[{"type": "websocket", "url": URL, "serializers": ["msgpack"],
                                   "max_retries": -1, "max_retry_delay": 2}],
-                     realm="realm-%d-77-dev" % SWARM,
+                     realm=PROVIDER_REALM,
                      authentication={"wampcra": {"authid": AUTHID, "secret": SECRET}})
 
     @comp.on_join
@@ -319,6 +355,123 @@ def provider_component():
     return comp
 
 
+# ------------------------------------------------- ironflock-auth stub (router)
+#
+# The facts ironflock-auth reads from the platform DB, for the harness's one
+# device. DEVICE_APPS: which apps run on which device (decides where the legacy
+# device credential may log in). Per-app credentials carry their device and
+# app; GRANTS: provider apps a consumer app was granted read access to.
+
+SERIAL = "06a0bf96-a539-4d6a-8471-ac7adc67616e"
+DEVICE_APPS = {42: {APP}}
+APP_CREDENTIALS = {
+    # authid: (secret, device_key, app_key or None for the legacy credential)
+    SERIAL: (SERIAL, 42, None),
+    "app-26-per-app": ("per-app-secret", 42, APP),
+}
+GRANTS = {APP: {77}}
+
+REALM_RE = re.compile(r"^realm-(\d+)-(\d+)-(dev|prod)$")
+
+
+def authenticate_userapp(realm, authid, details=None):
+    """auth.userapp.authenticate — the router's dynamic WAMP-CRA lookup for
+    /ws-ua-usr: args [realm, authid, details] -> {secret, role}, the role chosen
+    per HELLO realm (README "Cross-app access is read-only"):
+
+      per-app credential: `app` on its own app's realm, `app_reader` on a granted
+                          provider realm, refused elsewhere
+      legacy (serial, serial): `app` on the realm of an app running on that
+                          device, refused elsewhere (no cross-app access)
+    """
+    m = REALM_RE.match(realm or "")
+    cred = APP_CREDENTIALS.get(authid)
+    role = None
+    if m and cred and int(m.group(1)) == SWARM:
+        secret, device_key, app_key = cred
+        realm_app = int(m.group(2))
+        if app_key is None:
+            role = "app" if realm_app in DEVICE_APPS.get(device_key, ()) else None
+        elif realm_app == app_key:
+            role = "app"
+        elif realm_app in GRANTS.get(app_key, ()):
+            role = "app_reader"
+    authz_log.append({"kind": "authenticate", "realm": realm, "authid": authid, "role": role})
+    if role is None:
+        raise ApplicationError("wamp.error.not_authorized", "no admission for %s on %s" % (authid, realm))
+    return {"secret": cred[0], "role": role}
+
+
+def authorize(session, uri, action, options=None):
+    """auth.authorize — the router's `identity` callout. The production `app`
+    role sends every request on a digit-led URI here (raw table write topics
+    <swarm>.<app>.<table>, function URIs <swarm>.<device>.<app>.<STAGE>.<name>).
+    ironflock-auth's rule for those (docs/AUTHORIZATION.md, "data-realm action
+    URIs": registrant/publisher is an `app` session of that device on that
+    realm):
+
+      register / publish a function URI  only the device named in the URI, with
+                                         the realm's swarm, app and stage
+      call a function URI                any app session of that realm (another
+                                         device's function: call_device_function)
+      publish a table write topic        swarm and app of the realm
+      anything else (other swarm/app/stage, patterns, other roles)  deny
+    """
+    options = options or {}
+    realm = session.get("realm", "")
+    authid, role = session.get("authid"), session.get("authrole")
+    m = REALM_RE.match(realm)
+    cred = APP_CREDENTIALS.get(authid)
+    segs = uri.split(".")
+    allow, why = False, "no rule"
+    if role != "app":
+        why = "role %s" % role
+    elif not m or int(m.group(1)) != SWARM:
+        why = "not a data realm of this swarm"
+    elif cred is None:
+        why = "unknown authid"
+    elif (options.get("match") or "exact") != "exact":
+        why = "pattern over identity URIs"
+    else:
+        swarm, app, stage = m.group(1), m.group(2), m.group(3).upper()
+        device = str(cred[1])
+        if segs[0] != swarm:
+            why = "other swarm"
+        elif len(segs) == 3 and segs[1] == app:
+            allow, why = action == "publish", "table write topic"
+        elif len(segs) >= 5 and segs[2] == app and segs[3] == stage and all(segs[4:]):
+            if action == "call":
+                allow, why = True, "call device function"
+            elif action in ("register", "publish"):
+                allow = segs[1] == device
+                why = "own device function" if allow else "device %s is not %s" % (segs[1], device)
+        else:
+            why = "not a function URI of this realm"
+    authz_log.append({"kind": "authorize", "realm": realm, "authid": authid, "authrole": role,
+                      "action": action, "uri": uri, "match": options.get("match"),
+                      "allow": allow, "why": why})
+    return {"allow": allow}
+
+
+def auth_component():
+    comp = Component(transports=[{"type": "websocket", "url": AUTH_URL, "serializers": ["msgpack"],
+                                  "max_retries": -1, "max_retry_delay": 2}],
+                     realm=AUTH_REALM,
+                     authentication={"wampcra": {"authid": AUTH_AUTHID, "secret": AUTH_SECRET}})
+
+    @comp.on_join
+    async def joined(session, details):
+        await session.register(authorize, "auth.authorize")
+        if USERAPP_AUTH:
+            await session.register(authenticate_userapp, "auth.userapp.authenticate")
+        print("fake platform: auth realm ready (userapp authenticator: %s)" % USERAPP_AUTH, flush=True)
+
+    return comp
+
+
 if __name__ == "__main__":
     start_s3()
-    run([own_component(), provider_component()], log_level="warn")
+    components = [own_component(), provider_component()]
+    if AUTH_REALM:
+        components.append(auth_component())
+    run(components, log_level="warn")

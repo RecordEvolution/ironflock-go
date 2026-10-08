@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+      - name: Cross-build (devices are often 32-bit ARM)
+        run: |
+          for target in linux/arm linux/arm64 linux/386 windows/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+          done
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  integration:
+    # End-to-end against a real Crossbar router and a fake IronFlock platform;
+    # the Python SDK's run of the same scenario is the wire-level reference.
+    runs-on: ubuntu-latest
+    env:
+      DEVICE_SERIAL_NUMBER: 06a0bf96-a539-4d6a-8471-ac7adc67616e
+      SWARM_KEY: "2"
+      APP_KEY: "26"
+      ENV: DEV
+      DEVICE_KEY: "42"
+      APP_NAME: interop
+      DEVICE_NAME: interop-dev
+      IRONFLOCK_TEST_PLATFORM_URL: ws://localhost:18081/ws-ua-usr
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Crossbar and the Python SDK
+        run: python -m pip install crossbar==26.7.1 ironflock==1.9.0
+      - name: Start Crossbar and the fake platform
+        run: integration/crossbar/start.sh
+      - name: Python reference run
+        working-directory: integration
+        run: IRONFLOCK_ENV_DIR=$(mktemp -d) python -I py_scenario.py "$RUNNER_TEMP/py_out.json"
+      - name: Integration tests
+        env:
+          IRONFLOCK_TEST_PYTHON: python
+          IRONFLOCK_TEST_RESTART_ROUTER: integration/crossbar/restart.sh
+        run: |
+          export IRONFLOCK_TEST_RESTART_ROUTER="$PWD/$IRONFLOCK_TEST_RESTART_ROUTER"
+          IRONFLOCK_TEST_REFERENCE="$RUNNER_TEMP/py_out.json" go test -tags integration -race -count=1 -v ./integration/...
+      - name: Logs
+        if: failure()
+        run: tail -n 100 integration/crossbar/.run/*.log

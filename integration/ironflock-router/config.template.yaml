@@ -1,0 +1,196 @@
+# ironflock-router: local SDK conformance target (scratch, NOT a deployment).
+#
+# GENERATED: config.yaml is written by gen_config.py from this template and
+# the router's reference config (router/examples/config.yaml). Every
+# "#@ROLE <name>" line below is replaced by that role's block copied
+# byte-for-byte from the reference, so the client roles are the PRODUCTION
+# ones. gen_config.py --check proves it (parses both files, compares).
+# Edit this template, never config.yaml.
+#
+# Topology (mirrors production's listener split, docs/LISTENERS.md):
+#   :18082 /ws-ua-usr  app containers (SDKs).  Profile picked by
+#                      USERAPP_PROFILE: userapp_static (default, static CRA
+#                      users) or userapp_cra (dynamic CRA against a stub
+#                      auth.userapp.authenticate that fake_platform.py
+#                      registers, the production shape).
+#   :18084 /ws-svc     platform services: the fake platform (fake-backend),
+#                      its stub ironflock-auth session (svc_auth), and the
+#                      router's own in-process `system` sessions.
+#   :18083             ops (/healthz, /readyz, /stats).
+#
+# Local deviations from production are marked "DEVIATION:" below.
+# Start/stop: start.sh [AUTH_MODE=static|dynamic], stop.sh (this directory).
+
+log_level: ${IRONFLOCK_LOG_LEVEL:-info}
+
+listen:
+  websocket:
+    # App containers. Same knobs as production's /ws-ua-usr (compression
+    # off, 20s ping). Every listener offers JSON, MessagePack and CBOR.
+    - path: /ws-ua-usr
+      address: ":${ROUTER_PUBLIC_PORT:-18082}"
+      auth_profiles: [${USERAPP_PROFILE:-userapp_static}]
+      compression: { enabled: false }
+      ping: { interval_sec: 20 }
+
+    # Platform services (static principals), as production's /ws-svc.
+    - path: /ws-svc
+      address: ":${ROUTER_INTERNAL_PORT:-18084}"
+      auth_profiles: [svc_static]
+      compression: { enabled: false }
+      ping: { interval_sec: 10 }
+
+realms:
+  # The app's own data realm. Production: created and bound at runtime by
+  # fleetdb's RealmService through ironflock.router.realm.create/add_role.
+  # Here: declared statically; the schema allows it (realms[].roles), the
+  # bindings are identical in effect (the authorizer state is the same
+  # realm -> role map either way).
+  - uri: realm-2-26-dev
+    description: "Per-app data realm of app 26 (consumer), stage dev"
+    allow_disclose: true
+    roles:
+      - app
+      - svc_fake_platform
+
+  # The provider app's (77) data realm, granted to app 26 read-only.
+  # DEVIATION: production binds the same data-realm role set on every data
+  # realm (app, app_reader, board_*, services); `app` is left off here so a
+  # static `app` session that wanders onto this realm gets nothing.
+  - uri: realm-2-77-dev
+    description: "Per-app data realm of app 77 (provider), stage dev"
+    allow_disclose: true
+    roles:
+      - app_reader
+      - svc_fake_platform
+
+  # ironflock-auth's realm, as production: only svc_auth is bound; the
+  # router reaches auth.authorize / auth.userapp.authenticate through its
+  # own in-process sessions, which no binding gates.
+  - uri: ironflock.auth
+    description: "Authenticators and authorization policy (stubbed by fake_platform.py)"
+    allow_disclose: true
+    roles:
+      - svc_auth
+
+  # Management realm (ironflock.router.*). Nothing here uses it over the
+  # wire; declared so svc_auth could flush callout verdicts as in production.
+  - uri: ironflock.admin
+    description: "ironflock-router management realm"
+    allow_disclose: true
+    roles:
+      - svc_auth
+
+roles:
+  # ---------------------------------------------------------------------------
+  # PRODUCTION client roles, verbatim from router/examples/config.yaml.
+  # ---------------------------------------------------------------------------
+#@ROLE app_reader
+#@ROLE app
+
+  # ---------------------------------------------------------------------------
+  # Fake platform backend (fake_platform.py, authid fake-backend).
+  # DEVIATION: production runs fleetdb (svc_fleetdb) and fleetfiles
+  # (svc_fleetfiles) as two principals; the fake emulates both in one session
+  # per realm, so its role is the UNION of both roles' rules, copied verbatim,
+  # plus REGISTER on test.* for the harness hooks (test.recorded, test.reset,
+  # test.clear_recorded, test.provider.publish, test.authz_log).
+  # Neither real role alone covers it: svc_fleetdb lacks files.*,
+  # svc_fleetfiles lacks the table/history/secret/appaccess procedures.
+  # ---------------------------------------------------------------------------
+  - name: svc_fake_platform
+    description: "fake_platform.py: svc_fleetdb + svc_fleetfiles rules (verbatim) + test hooks"
+    permissions:
+#@RULES svc_fleetdb
+#@RULES svc_fleetfiles
+      - { uri: "test.", match: prefix, allow_register: true }
+
+  # ironflock-auth (stubbed by fake_platform.py's auth session), verbatim.
+#@ROLE svc_auth
+
+  # The router's in-process sessions (authorizer callout + dynamic
+  # authenticator) authenticate as a static user of this role; nexus admits
+  # them without authorization, and the role is bound on no realm here.
+  # DEVIATION: production's `system` role is RESWARM's large generated
+  # service role; RESWARM is not emulated, so it carries no rules.
+  - name: system
+    description: "Router in-process sessions only (RESWARM not emulated)"
+    permissions: []
+
+# Same callout as production: app's digit-led rules (function URIs, raw table
+# write topics) name `identity`, answered by auth.authorize on ironflock.auth.
+# fake_platform.py registers a stub implementing ironflock-auth's rule for
+# data-realm action URIs (see its authorize()). IDENTITY_AUTHORIZER_MODE=shadow
+# turns it advisory for debugging.
+authorizers:
+  identity:
+    procedure: auth.authorize
+    realm: ironflock.auth
+    role: system
+    timeout_ms: 2000
+    cache_ttl_sec: 30
+    mode: ${IDENTITY_AUTHORIZER_MODE:-enforce}
+
+auth:
+  role_bounds: enforce
+  call_timeout_sec: 5
+  cache_ttl_sec: 10
+  ticket_realm_passthrough: true
+  ready_grace_sec: 60
+
+  profiles:
+    # DEFAULT /ws-ua-usr profile: static WAMP-CRA users.
+    # A static user has ONE role on every realm (nexus KeyStore is keyed by
+    # authid only), so production's per-realm answer ("app on its own
+    # realm, app_reader on a granted provider realm, refused elsewhere")
+    # cannot be expressed: the per-app credential is `app` everywhere and a
+    # separate authid stands in for the consumer. The SDKs present ONE
+    # credential to both realms, so with this profile connect_to_app() lands
+    # on realm-2-77-dev as `app`, a role not bound there: every request is
+    # refused (role_unknown). Use USERAPP_PROFILE=userapp_cra for the
+    # production per-realm behaviour.
+    userapp_static:
+      wampcra:
+        type: static
+        users:
+          # legacy device-wide credential (serial, serial)
+          - { authid: "06a0bf96-a539-4d6a-8471-ac7adc67616e", role: app, secret: "06a0bf96-a539-4d6a-8471-ac7adc67616e" }
+          # per-app credential (APP_AUTH_ID / APP_AUTH_SECRET)
+          - { authid: "app-26-per-app", role: app, secret: "per-app-secret" }
+          # stand-in for the per-app credential's app_reader admission on the
+          # provider realm (production: same authid as above)
+          - { authid: "app-26-reader", role: app_reader, secret: "per-app-reader-secret" }
+      allowed_roles: [app, app_reader]
+
+    # PRODUCTION shape: dynamic WAMP-CRA, the authenticator answers per HELLO
+    # realm. auth.userapp.authenticate is registered by fake_platform.py when
+    # FAKE_PLATFORM_USERAPP_AUTH=1 (start.sh AUTH_MODE=dynamic) with the same
+    # three credentials and the production rule (see authenticate_userapp()).
+    userapp_cra:
+      wampcra:
+        type: dynamic
+        authenticator: auth.userapp.authenticate
+        authenticator_realm: ironflock.auth
+        authenticator_role: system
+        principals: false
+      allowed_roles: [app, app_reader]
+
+    # Platform services on /ws-svc, static, one principal per process.
+    # Local secrets inline (production: ${WAMP_SECRET_*} without default).
+    svc_static:
+      wampcra:
+        type: static
+        users:
+          - { authid: system, role: system, secret: "${WAMP_SYSTEM_SECRET:-local-system-secret}" }
+          - { authid: fake-backend, role: svc_fake_platform, secret: "fake-backend-secret" }
+          - { authid: svc_auth, role: svc_auth, secret: "svc-auth-secret" }
+      allowed_roles: [system, svc_fake_platform, svc_auth]
+
+ops:
+  address: ":${ROUTER_OPS_PORT:-18083}"
+
+management:
+  realm: ironflock.admin
+
+cluster:
+  enabled: false
