@@ -1,0 +1,5 @@
+/coverage.out
+/coverage.html
+*.test
+/dist/
+.DS_Store
