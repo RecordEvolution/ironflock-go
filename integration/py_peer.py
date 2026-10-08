@@ -15,7 +15,7 @@ import sys
 
 from ironflock import IronFlock
 
-URL = os.environ.get("IRONFLOCK_TEST_PLATFORM_URL", "ws://localhost:18081/ws-ua-usr")
+URL = os.environ.get("IRONFLOCK_TEST_PLATFORM_URL", "ws://localhost:18082/ws-ua-usr")
 
 
 async def main():

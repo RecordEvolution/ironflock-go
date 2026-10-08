@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 // The SDK under test: IRONFLOCK_JS_SDK may point at a built dist/index.mjs.
 const { IronFlock } = await import(process.env.IRONFLOCK_JS_SDK ?? "ironflock");
 
-const URL = process.env.IRONFLOCK_TEST_PLATFORM_URL ?? "ws://localhost:18081/ws-ua-usr";
+const URL = process.env.IRONFLOCK_TEST_PLATFORM_URL ?? "ws://localhost:18082/ws-ua-usr";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function jsonable(v) {

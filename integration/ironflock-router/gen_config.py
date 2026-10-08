@@ -1,24 +1,29 @@
-"""Writes config.yaml from config.template.yaml, copying role blocks verbatim
-from the router's reference config.
+"""Writes $STATE_DIR/config.yaml from config.template.yaml, copying role blocks
+verbatim from the router's reference config ($ROUTER_REF_CONFIG, the router's
+examples/config.yaml; the router image ships it as
+/etc/ironflock-router/config.yaml). start.sh runs it.
 
   #@ROLE <name>   -> the whole `- name: <name>` block (name, description,
                      permissions), byte-for-byte
   #@RULES <name>  -> only that role's permission lines, byte-for-byte
 
   python3 gen_config.py            # write config.yaml
-  python3 gen_config.py --check    # also verify: the copied roles parse to
-                                   # exactly the reference roles
+  python3 gen_config.py --check    # also verify (needs PyYAML): the copied
+                                   # roles parse to exactly the reference roles
 """
 
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# The router's reference config (ironflock-router/examples/config.yaml), the
-# source of the production role blocks.
 REF = os.environ.get("ROUTER_REF_CONFIG") or sys.exit("set ROUTER_REF_CONFIG to ironflock-router/examples/config.yaml")
 TEMPLATE = os.path.join(HERE, "config.template.yaml")
-OUT = os.path.join(os.environ.get("STATE_DIR", os.path.join(HERE, ".run")), "config.yaml")
+OUT = os.path.join(os.environ.get("STATE_DIR") or os.path.join(HERE, ".run"), "config.yaml")
+
+
+def read_lines(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read().splitlines(keepends=True)
 
 
 def role_block(lines, name):
@@ -46,9 +51,9 @@ def rule_lines(lines, name):
 
 
 def generate():
-    ref = open(REF).read().splitlines(keepends=True)
+    ref = read_lines(REF)
     out = []
-    for ln in open(TEMPLATE).read().splitlines(keepends=True):
+    for ln in read_lines(TEMPLATE):
         s = ln.strip()
         if s.startswith("#@ROLE "):
             out.extend(role_block(ref, s.split()[1]))
@@ -57,16 +62,19 @@ def generate():
         else:
             out.append(ln)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    open(OUT, "w").write("".join(out))
+    with open(OUT, "w", encoding="utf-8") as f:
+        f.write("".join(out))
     print("wrote", OUT)
 
 
 def check():
     import re
-    import yaml  # system python3 has PyYAML
+    import yaml
 
     def load(path):  # the router's ${VAR:-default} interpolation, env-free
-        raw = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", lambda m: m.group(2) or "", open(path).read())
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        raw = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", lambda m: m.group(2) or "", raw)
         return {r["name"]: r for r in yaml.safe_load(raw)["roles"]}
 
     ref, got = load(REF), load(OUT)

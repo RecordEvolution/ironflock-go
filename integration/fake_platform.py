@@ -1,61 +1,64 @@
 """Fake IronFlock platform services for end-to-end SDK tests.
 
-Joins the local Crossbar node as the app's data backend (realm-2-26-dev) and
-as a provider app's backend (realm-2-77-dev), emulates the procedures and
-topics the real platform serves, and records every payload it receives so
-tests can compare what different SDKs put on the wire.
+Joins ironflock-router's service listener as the app's data backend
+(realm-2-26-dev) and as a provider app's backend (realm-2-77-dev), emulates
+the procedures and topics the real platform serves, and records every payload
+it receives so tests can compare what different SDKs put on the wire. On the
+auth realm it stubs ironflock-auth: the router's `identity` authorizer callout
+and its dynamic WAMP-CRA authenticator for app containers.
+ironflock-router/start.sh starts it next to the router.
 
 Test hooks (on realm-2-26-dev):
   test.recorded()            -> list of {"kind", "uri", "args", "kwargs"}
   test.reset()               -> clears recordings and stored rows/files
+  test.clear_recorded()      -> clears recordings only
   test.provider.publish(t, row, bulk=False) -> publishes on the provider realm
-  test.authz_log(clear=False) -> verdicts of the auth.authorize stub (below)
+  test.authz_log(clear=False) -> verdicts of the ironflock-auth stub (below)
 
-Two variants, selected by environment (defaults = the Crossbar variant):
+Environment (defaults = the harness ironflock-router/start.sh runs):
 
   FAKE_PLATFORM_ROUTER         router URL for the data-realm sessions
-                               (default ws://localhost:18081/ws-ua-usr)
-  FAKE_PLATFORM_S3_PORT        fake object store port (default 18090)
+                               (default ws://127.0.0.1:18084/ws-svc)
+  FAKE_PLATFORM_S3_PORT        fake object store port (default 18091)
   FAKE_PLATFORM_AUTHID/SECRET  backend credential (fake-backend/fake-backend-secret)
   FAKE_PLATFORM_OWN_REALM      default realm-2-26-dev
   FAKE_PLATFORM_PROVIDER_REALM default realm-2-77-dev
-  FAKE_PLATFORM_AUTH_REALM     set (e.g. ironflock.auth) to also join that realm as
-                               a stub of ironflock-auth and register auth.authorize,
-                               the router's `identity` authorizer callout. Unset: no
-                               auth session (Crossbar has no callout).
+  FAKE_PLATFORM_AUTH_REALM     realm of the ironflock-auth stub, which registers
+                               auth.authorize, the router's `identity` authorizer
+                               callout (default ironflock.auth; empty: no auth
+                               session)
   FAKE_PLATFORM_AUTH_ROUTER    URL for that session (default FAKE_PLATFORM_ROUTER)
   FAKE_PLATFORM_AUTH_AUTHID/SECRET  its credential (svc_auth/svc-auth-secret)
-  FAKE_PLATFORM_USERAPP_AUTH   1: also register auth.userapp.authenticate, the
-                               router's dynamic WAMP-CRA authenticator for app
-                               containers (per-realm role, production rule)
+  FAKE_PLATFORM_USERAPP_AUTH   1 (default): the stub also registers
+                               auth.userapp.authenticate, the router's dynamic
+                               WAMP-CRA authenticator for app containers
+                               (per-realm role, production rule); 0: it does not
+                               (start.sh AUTH_MODE=static)
 """
 
 import asyncio
 import base64
-import json
 import os
 import re
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from autobahn.asyncio.component import Component, run
-from autobahn.wamp import auth
 from autobahn.wamp.exception import ApplicationError
-from autobahn.wamp.types import RegisterOptions, SubscribeOptions, PublishOptions
+from autobahn.wamp.types import RegisterOptions, SubscribeOptions
 
-URL = os.environ.get("FAKE_PLATFORM_ROUTER", "ws://localhost:18081/ws-ua-usr")
-S3_PORT = int(os.environ.get("FAKE_PLATFORM_S3_PORT", "18090"))
+URL = os.environ.get("FAKE_PLATFORM_ROUTER", "ws://127.0.0.1:18084/ws-svc")
+S3_PORT = int(os.environ.get("FAKE_PLATFORM_S3_PORT", "18091"))
 AUTHID = os.environ.get("FAKE_PLATFORM_AUTHID", "fake-backend")
 SECRET = os.environ.get("FAKE_PLATFORM_SECRET", "fake-backend-secret")
 SWARM, APP = 2, 26
 OWN_REALM = os.environ.get("FAKE_PLATFORM_OWN_REALM", "realm-%d-%d-dev" % (SWARM, APP))
 PROVIDER_REALM = os.environ.get("FAKE_PLATFORM_PROVIDER_REALM", "realm-%d-77-dev" % SWARM)
-AUTH_REALM = os.environ.get("FAKE_PLATFORM_AUTH_REALM", "")
+AUTH_REALM = os.environ.get("FAKE_PLATFORM_AUTH_REALM", "ironflock.auth")
 AUTH_URL = os.environ.get("FAKE_PLATFORM_AUTH_ROUTER", URL)
 AUTH_AUTHID = os.environ.get("FAKE_PLATFORM_AUTH_AUTHID", "svc_auth")
 AUTH_SECRET = os.environ.get("FAKE_PLATFORM_AUTH_SECRET", "svc-auth-secret")
-USERAPP_AUTH = os.environ.get("FAKE_PLATFORM_USERAPP_AUTH", "") == "1"
+USERAPP_AUTH = os.environ.get("FAKE_PLATFORM_USERAPP_AUTH", "1") == "1"
 
 recorded = []
 authz_log = []  # auth.authorize verdicts; kept apart so test.recorded stays SDK-only

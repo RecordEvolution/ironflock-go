@@ -7,19 +7,26 @@
 # ones. gen_config.py --check proves it (parses both files, compares).
 # Edit this template, never config.yaml.
 #
-# Topology (mirrors production's listener split, docs/LISTENERS.md):
-#   :18082 /ws-ua-usr  app containers (SDKs).  Profile picked by
-#                      USERAPP_PROFILE: userapp_static (default, static CRA
-#                      users) or userapp_cra (dynamic CRA against a stub
-#                      auth.userapp.authenticate that fake_platform.py
-#                      registers, the production shape).
-#   :18084 /ws-svc     platform services: the fake platform (fake-backend),
+# Topology (mirrors production's listener split, docs/LISTENERS.md); the
+# router fills in the ${VAR:-default} values from its environment, which
+# start.sh sets:
+#   ROUTER_PUBLIC_PORT (18082) /ws-ua-usr
+#                      app containers (SDKs). Profile picked by
+#                      USERAPP_PROFILE, which start.sh derives from AUTH_MODE:
+#                      userapp_cra (AUTH_MODE=dynamic, the default: dynamic
+#                      CRA against the stub auth.userapp.authenticate that
+#                      fake_platform.py registers, the production shape) or
+#                      userapp_static (AUTH_MODE=static: static CRA users).
+#   ROUTER_INTERNAL_PORT (18084) /ws-svc
+#                      platform services: the fake platform (fake-backend),
 #                      its stub ironflock-auth session (svc_auth), and the
 #                      router's own in-process `system` sessions.
-#   :18083             ops (/healthz, /readyz, /stats).
+#   ROUTER_OPS_PORT (18083)
+#                      ops (/healthz, /readyz, /stats).
 #
 # Local deviations from production are marked "DEVIATION:" below.
-# Start/stop: start.sh [AUTH_MODE=static|dynamic], stop.sh (this directory).
+# start.sh starts the router (binary or image) and the fake platform,
+# restart.sh restarts only the router, stop.sh stops both (this directory).
 
 log_level: ${IRONFLOCK_LOG_LEVEL:-info}
 
@@ -139,7 +146,8 @@ auth:
   ready_grace_sec: 60
 
   profiles:
-    # DEFAULT /ws-ua-usr profile: static WAMP-CRA users.
+    # AUTH_MODE=static (and the fallback when USERAPP_PROFILE is unset):
+    # static WAMP-CRA users.
     # A static user has ONE role on every realm (nexus KeyStore is keyed by
     # authid only), so production's per-realm answer ("app on its own
     # realm, app_reader on a granted provider realm, refused elsewhere")
@@ -162,10 +170,11 @@ auth:
           - { authid: "app-26-reader", role: app_reader, secret: "per-app-reader-secret" }
       allowed_roles: [app, app_reader]
 
-    # PRODUCTION shape: dynamic WAMP-CRA, the authenticator answers per HELLO
-    # realm. auth.userapp.authenticate is registered by fake_platform.py when
-    # FAKE_PLATFORM_USERAPP_AUTH=1 (start.sh AUTH_MODE=dynamic) with the same
-    # three credentials and the production rule (see authenticate_userapp()).
+    # PRODUCTION shape (AUTH_MODE=dynamic, the default): dynamic WAMP-CRA,
+    # the authenticator answers per HELLO realm. auth.userapp.authenticate is
+    # registered by fake_platform.py when FAKE_PLATFORM_USERAPP_AUTH=1, with
+    # the legacy and the per-app credential and the production rule (see
+    # authenticate_userapp()).
     userapp_cra:
       wampcra:
         type: dynamic
