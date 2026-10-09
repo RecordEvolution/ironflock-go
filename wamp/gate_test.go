@@ -201,8 +201,17 @@ func (l *lineLog) Printf(format string, v ...any) { l.put(fmt.Sprintf(format, v.
 // router does only now and then.
 func scriptedSession(t *testing.T) (*session, nxwamp.Peer, *lineLog) {
 	t.Helper()
+	return scriptedSessionWith(t, peerOptions{holdLimit: 5 * time.Second})
+}
+
+// scriptedSessionWith is scriptedSession with an observedPeer configured by
+// opts. The router side's Send is buffered; what the client sends waits
+// until the router side receives it: a router that does not read is an
+// uplink that does not move.
+func scriptedSessionWith(t *testing.T, opts peerOptions) (*session, nxwamp.Peer, *lineLog) {
+	t.Helper()
 	clientSide, routerSide := transport.LinkedPeers()
-	p := newObservedPeer(clientSide, newSignal(), peerOptions{holdLimit: 5 * time.Second})
+	p := newObservedPeer(clientSide, newSignal(), opts)
 	go func() {
 		<-routerSide.Recv() // HELLO
 		routerSide.Send() <- &nxwamp.Welcome{ID: 1, Details: nxwamp.Dict{

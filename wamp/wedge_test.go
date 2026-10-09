@@ -3,6 +3,7 @@ package wamp
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -113,30 +114,36 @@ func TestForwarderStallClosesWedgedSession(t *testing.T) {
 }
 
 // The router's close reason survives a wedged client: the peer saw the
-// GOODBYE even though the client never processed it. With FailOnAuthError a
-// revoked grant stays fatal instead of turning into a transport loss and a
-// reconnect.
+// GOODBYE even though the client never processed it, so the session ends
+// with that reason instead of as a transport loss. With FailOnAuthError an
+// auth reason counts towards the refusal that a revoked grant makes final.
 func TestWedgedClientKeepsCloseReason(t *testing.T) {
 	tr := newTestRouter(t, true)
 	connects := make(chan struct{}, 4)
 	disconnects := make(chan string, 4)
 	reasons := make(chan string, 4)
-	c, _ := startTestConn(t, tr, wedgeOptions(connects, disconnects), func(cfg *Config, _ *Connection) {
-		cfg.FailOnAuthError = true
-		cfg.OnAuthFailure = func(reason string) { reasons <- reason }
-	})
+	c, _ := startTestConn(t, tr, wedgeOptions(connects, disconnects), denialGrace(200*time.Millisecond),
+		func(cfg *Config, _ *Connection) {
+			cfg.FailOnAuthError = true
+			cfg.OnAuthFailure = func(reason string) { reasons <- reason }
+		})
 	recv(t, connects, "OnConnect")
 	wedgeClient(t, tr, c)
 
+	tr.keys.set(testAuthID, "revoked")
 	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", URINotAuthorized, "revoked", 0); n != 1 {
 		t.Fatalf("killed %d sessions", n)
 	}
-	if got := recv(t, reasons, "OnAuthFailure"); got != URINotAuthorized {
-		t.Fatalf("OnAuthFailure(%q), want %q", got, URINotAuthorized)
+	if got := recv(t, disconnects, "OnDisconnect"); got != URINotAuthorized {
+		t.Fatalf("OnDisconnect(%q), want %q", got, URINotAuthorized)
+	}
+	got := recv(t, reasons, "OnAuthFailure")
+	if !IsFatalAuthReason(got) {
+		t.Fatalf("OnAuthFailure(%q)", got)
 	}
 	err := c.WaitSession(context.Background(), 50*time.Millisecond)
 	var authErr *AuthError
-	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != URINotAuthorized {
+	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != got {
 		t.Fatalf("WaitSession = %v, want ErrStopped wrapping the *AuthError", err)
 	}
 	noRecv(t, connects, "a reconnect after a fatal close")
@@ -203,6 +210,64 @@ func TestCallOnAbandonedSessionFails(t *testing.T) {
 		t.Fatalf("Call = %v, want a lost session (ErrNotConnected)", err)
 	}
 	recv(t, connects, "OnConnect with a fresh client")
+}
+
+// A handler still running when its session is abandoned sees its ctx end
+// with the session, as InvocationHandler promises (finding 34): nexus
+// cancels it only when its client ends, which a wedged client never does.
+// Neither the handler nor nexus's invocation goroutine outlives the session,
+// although the wedged client is never released here.
+func TestHandlerCtxEndsWithAbandonedSession(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 4)
+	disconnects := make(chan string, 4)
+	c, _ := startTestConn(t, tr, wedgeOptions(connects, disconnects))
+	recv(t, connects, "OnConnect")
+
+	entered := make(chan struct{}, 1)
+	returned := make(chan error, 1)
+	if _, err := c.Register(ctxTimeout(t, 5*time.Second), "long.proc", func(ctx context.Context, _ *Invocation) (any, error) {
+		entered <- struct{}{}
+		<-ctx.Done()
+		returned <- ctx.Err()
+		return nil, ctx.Err()
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	caller := tr.local(t)
+	go func() { _, _ = caller.Call(context.Background(), "long.proc", nil, nil, nil, nil) }()
+	recv(t, entered, "the handler to run")
+	wedgeClient(t, tr, c) // released only at cleanup
+
+	tr.ln.dropAll()
+	recv(t, disconnects, "OnDisconnect")
+	if err := recv(t, returned, "the handler's ctx to end with its abandoned session"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ctx.Err() = %v, want context.Canceled", err)
+	}
+	recv(t, connects, "OnConnect with a fresh client")
+	eventually(t, 5*time.Second, "nexus's invocation goroutine to exit", func() bool {
+		return countGoroutines("runHandleInvocation.func1") == 0
+	})
+}
+
+// countGoroutines returns how many goroutines have fn in their stack.
+func countGoroutines(fn string) int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, fn) {
+			count++
+		}
+	}
+	return count
 }
 
 // Once the wedged client resumes, nothing of the abandoned session is left.

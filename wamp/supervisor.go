@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/gammazero/nexus/v3/client"
@@ -28,6 +29,20 @@ type tunables struct {
 	retryFirstDelay time.Duration
 	retryMaxDelay   time.Duration
 
+	// A fatal auth refusal of a connection that has been established is
+	// final once it persists: authDenialAttempts refused attempts or more,
+	// the first one at least authDenialGrace ago (see
+	// Config.FailOnAuthError).
+	authDenialAttempts int
+	authDenialGrace    time.Duration
+
+	// The retries of a failed restore while the session lasts (see
+	// Connection.retryRestore) wait restoreRetryFirstDelay, doubling up to
+	// restoreRetryMaxDelay, with relative random jitter restoreRetryJitter.
+	restoreRetryFirstDelay time.Duration
+	restoreRetryMaxDelay   time.Duration
+	restoreRetryJitter     float64
+
 	// connectTimeout bounds the TCP/TLS/WebSocket handshake of an attempt;
 	// responseTimeout bounds each step of the WAMP join, every router
 	// answer to SUBSCRIBE, REGISTER and acknowledged PUBLISH, the GOODBYE
@@ -48,6 +63,15 @@ type tunables struct {
 
 	// onRetry, if set, observes every scheduled reconnect (tests).
 	onRetry func(reason string, delay time.Duration)
+	// onDial, if set, observes every TCP dial of a connection attempt
+	// (tests). Dials run on the supervisor goroutine.
+	onDial func()
+	// beforePublish, if set, runs in establish while it holds c.mu, right
+	// before it publishes the restored session (tests).
+	beforePublish func()
+	// afterSubscribe, if set, runs in subscribeOn right after the router
+	// accepted its SUBSCRIBE (tests).
+	afterSubscribe func()
 }
 
 func defaultTunables() tunables {
@@ -60,6 +84,11 @@ func defaultTunables() tunables {
 		retryDelayJitter:         RetryDelayJitter,
 		retryFirstDelay:          RetryFirstDelay,
 		retryMaxDelay:            RetryMaxDelay,
+		authDenialAttempts:       3,
+		authDenialGrace:          60 * time.Second,
+		restoreRetryFirstDelay:   1 * time.Second,
+		restoreRetryMaxDelay:     30 * time.Second,
+		restoreRetryJitter:       0.15,
 		connectTimeout:           15 * time.Second,
 		responseTimeout:          DefaultSessionWaitTimeout,
 		startTeardown:            5 * time.Second,
@@ -140,6 +169,29 @@ func (b *backoff) next() time.Duration {
 	return d
 }
 
+// authDenial is the streak of fatal auth refusals (IsFatalAuthReason) since
+// the last join: a refused attempt, or a session the router closed with
+// such a reason. Only the supervisor goroutine uses it.
+type authDenial struct {
+	t     *tunables
+	count int
+	since time.Time // of the first refusal
+}
+
+func (d *authDenial) reset() { d.count = 0 }
+
+// refused records a refusal. It reports whether the refusal persists —
+// authDenialAttempts refusals or more, the first one authDenialGrace ago or
+// longer — and whether it is the first of the streak.
+func (d *authDenial) refused() (persists, first bool) {
+	now := d.t.now()
+	if d.count == 0 {
+		d.since = now
+	}
+	d.count++
+	return d.count >= d.t.authDenialAttempts && now.Sub(d.since) >= d.t.authDenialGrace, d.count == 1
+}
+
 // supervise is the connection's only connect/retry loop. It runs from Start
 // until ctx is done — the connection was stopped, or Start failed — or the
 // connection fails for good, and then closes done. Everything it does is
@@ -147,16 +199,18 @@ func (b *backoff) next() time.Duration {
 func (c *Connection) supervise(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
 	bo := newBackoff(&c.t)
+	denial := authDenial{t: &c.t}
 	for ctx.Err() == nil {
 		s, reason, err := c.dialAndJoin(ctx)
 		if err == nil {
 			bo.joined()
+			denial.reset()
 			reason = c.runSession(ctx, s)
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		if c.cfg.FailOnAuthError && IsFatalAuthReason(reason) {
+		if c.cfg.FailOnAuthError && IsFatalAuthReason(reason) && c.deniedForGood(&denial, reason) {
 			c.failAuth(reason)
 			return
 		}
@@ -206,6 +260,9 @@ func (c *Connection) dialAndJoin(ctx context.Context) (*session, string, error) 
 	wsCfg := transport.WebsocketConfig{
 		KeepAlive: c.keepAlive(),
 		Dial: func(network, addr string) (net.Conn, error) {
+			if c.t.onDial != nil {
+				c.t.onDial()
+			}
 			var d net.Dialer
 			nc, err := d.DialContext(attempt, network, addr)
 			if err != nil {
@@ -284,7 +341,8 @@ func (c *Connection) dialAndJoin(ctx context.Context) (*session, string, error) 
 // freshly joined session, announces it, and blocks until it ends or ctx is
 // done. It returns the close reason ("" when ctx is done).
 func (c *Connection) runSession(ctx context.Context, s *session) string {
-	if !c.establish(ctx, s) {
+	failed, ok := c.establish(ctx, s)
+	if !ok {
 		c.markDown(s)
 		c.teardown(s, s.alive())
 		if ctx.Err() != nil {
@@ -297,6 +355,9 @@ func (c *Connection) runSession(ctx context.Context, s *session) string {
 	c.log.Info("Connection to IronFlock app realm established", "url", c.cfg.URL)
 	if cb := c.cfg.OnConnect; cb != nil {
 		c.runCallback("OnConnect", cb)
+	}
+	if !failed.empty() {
+		go c.retryRestore(ctx, s, failed)
 	}
 
 	if !c.awaitEnd(ctx, s) {
@@ -355,70 +416,182 @@ func (c *Connection) awaitEnd(ctx context.Context, s *session) bool {
 // and then publishes s as the current session, unless ctx is done. Holding
 // c.state throughout keeps restores and subscription changes from
 // interleaving, and no operation sees the session before its restore is
-// complete.
-func (c *Connection) establish(ctx context.Context, s *session) bool {
+// complete. It returns what failed to restore.
+func (c *Connection) establish(ctx context.Context, s *session) (failed restoreList, ok bool) {
 	if err := c.state.lock(ctx); err != nil {
-		return false
+		return restoreList{}, false
 	}
 	defer c.state.unlock()
-	c.restore(ctx, s)
+	failed = c.restore(ctx, s)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if ctx.Err() != nil || !s.alive() {
-		return false
+		return restoreList{}, false
+	}
+	if hook := c.t.beforePublish; hook != nil {
+		hook()
 	}
 	c.sess = s
+	c.established = true
 	close(c.upCh)
-	return true
+	return failed, true
 }
 
-// restore re-subscribes and re-registers every tracked entry on s. An entry
-// that fails stays tracked, inactive, and is retried after the next join.
-// Entries removed while their removal waits for c.state are skipped.
-// c.state must be held.
-func (c *Connection) restore(ctx context.Context, s *session) {
+// restoreList lists subscription groups and registrations to restore.
+type restoreList struct {
+	groups []*subGroup
+	regs   []*Registration
+}
+
+func (l restoreList) empty() bool { return len(l.groups) == 0 && len(l.regs) == 0 }
+
+// restore re-subscribes and re-registers every tracked entry on s, and
+// returns the entries that failed: they stay tracked, inactive, and are
+// retried while s lasts (see retryRestore) and after the next join. Entries
+// removed while their removal waits for c.state are skipped. c.state must
+// be held.
+func (c *Connection) restore(ctx context.Context, s *session) (failed restoreList) {
 	groups := c.groupList()
 	if n := len(groups); n > 0 {
 		c.log.Info("Resubscribing", "subscriptions", n)
 	}
 	for _, g := range groups {
 		if !s.alive() || ctx.Err() != nil {
-			return
+			return restoreList{}
 		}
 		if !g.wanted() {
 			g.sess.Store(nil)
 			continue
 		}
-		err := s.subscribe(g.topic, g.onEvent, cloneDict(g.options))
-		if err != nil {
-			g.sess.Store(nil)
-			c.log.Warn("Failed to restore subscription; retrying after the next reconnect", "topic", g.topic,
-				"error", c.requestError("subscribe to topic '"+g.topic+"'", subscribePrefix(g.topic), err))
-			continue
+		if err := c.restoreGroup(s, g); err != nil {
+			c.log.Warn("Failed to restore subscription; retrying", "topic", g.topic, "error", err)
+			failed.groups = append(failed.groups, g)
 		}
-		g.sess.Store(s)
 	}
 	if n := len(c.regs); n > 0 {
 		c.log.Info("Re-registering", "procedures", n)
 	}
 	for _, r := range c.regs {
 		if !s.alive() || ctx.Err() != nil {
-			return
+			return restoreList{}
 		}
 		if r.removed.Load() {
 			r.sess.Store(nil)
 			continue
 		}
-		err := s.register(r.procedure, r.invoke, cloneDict(r.options))
-		if err != nil {
-			r.sess.Store(nil)
-			c.log.Warn("Failed to restore registration; retrying after the next reconnect", "procedure", r.procedure,
-				"error", c.requestError("register procedure '"+r.procedure+"'", registerPrefix(r.procedure), err))
+		if err := c.restoreRegistration(s, r); err != nil {
+			c.log.Warn("Failed to restore registration; retrying", "procedure", r.procedure, "error", err)
+			failed.regs = append(failed.regs, r)
+		}
+	}
+	return failed
+}
+
+// restoreGroup subscribes g's WAMP subscription on s. c.state must be held.
+func (c *Connection) restoreGroup(s *session, g *subGroup) error {
+	if err := s.subscribe(g.topic, g.onEvent, cloneDict(g.options)); err != nil {
+		g.sess.Store(nil)
+		return c.requestError("subscribe to topic '"+g.topic+"'", subscribePrefix(g.topic), err)
+	}
+	g.sess.Store(s)
+	return nil
+}
+
+// restoreRegistration registers r on s. c.state must be held.
+func (c *Connection) restoreRegistration(s *session, r *Registration) error {
+	if err := s.register(r.procedure, r.invokeOn(s), cloneDict(r.options)); err != nil {
+		r.sess.Store(nil)
+		return c.requestError("register procedure '"+r.procedure+"'", registerPrefix(r.procedure), err)
+	}
+	r.sess.Store(s)
+	return nil
+}
+
+// retryRestore retries, while the session s lasts, the entries its restore
+// failed to restore. A router refuses such a restore only for a passing
+// reason — the entries were accepted before — such as ironflock-router's
+// identity check of a device function failing closed while its authorizer
+// is slow or unavailable; without retries the entry would stay inactive
+// until the next reconnect, which a stable link may never bring. Attempts
+// follow restoreRetryFirstDelay, doubling up to restoreRetryMaxDelay, with
+// jitter (the devices of a fleet reconnect together after a platform event).
+// Each attempt holds c.state and goes on only while s is the current
+// session; it skips the entries removed meanwhile, or restored otherwise (a
+// new handler re-subscribes its group). A registration another session took
+// over (force_reregister) is never retried here: it did not fail to restore.
+// The retries end once nothing is left, or when s or ctx ends; the next
+// join's restore takes over then.
+func (c *Connection) retryRestore(ctx context.Context, s *session, pending restoreList) {
+	delay := c.t.restoreRetryFirstDelay
+	for {
+		wait := delay
+		if j := c.t.restoreRetryJitter; j > 0 {
+			wait = time.Duration(float64(delay) * (1 + j*(2*c.t.rand()-1)))
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-s.down:
+			timer.Stop()
+			return
+		case <-s.peer.Done():
+			timer.Stop()
+			return
+		}
+		if !c.restoreAgain(ctx, s, &pending) {
+			return
+		}
+		delay = min(2*delay, c.t.restoreRetryMaxDelay)
+	}
+}
+
+// restoreAgain makes one attempt of retryRestore. It reports whether
+// anything is left to retry on s.
+func (c *Connection) restoreAgain(ctx context.Context, s *session, pending *restoreList) bool {
+	if err := c.state.lock(ctx); err != nil {
+		return false
+	}
+	defer c.state.unlock()
+	if c.currentSession() != s || !s.alive() {
+		return false
+	}
+	tracked := c.groupList()
+	var groups []*subGroup
+	for _, g := range pending.groups {
+		if !slices.Contains(tracked, g) || !g.wanted() || g.sess.Load() == s {
 			continue
 		}
-		r.sess.Store(s)
+		if err := c.restoreGroup(s, g); err != nil {
+			if !s.alive() {
+				return false
+			}
+			c.log.Debug("Failed to restore subscription; retrying", "topic", g.topic, "error", err)
+			groups = append(groups, g)
+			continue
+		}
+		c.log.Info("Subscription restored", "topic", g.topic)
 	}
+	var regs []*Registration
+	for _, r := range pending.regs {
+		if !slices.Contains(c.regs, r) || r.removed.Load() || r.sess.Load() == s {
+			continue
+		}
+		if err := c.restoreRegistration(s, r); err != nil {
+			if !s.alive() {
+				return false
+			}
+			c.log.Debug("Failed to restore registration; retrying", "procedure", r.procedure, "error", err)
+			regs = append(regs, r)
+			continue
+		}
+		c.log.Info("Registration restored", "procedure", r.procedure)
+	}
+	*pending = restoreList{groups: groups, regs: regs}
+	return !pending.empty()
 }
 
 // markDown withdraws s as the current session.
@@ -434,7 +607,8 @@ func (c *Connection) markDown(s *session) {
 
 // teardown ends the session and closes its client and WebSocket, within
 // bounds: with graceful set it first says GOODBYE (see leave). Calls still
-// waiting on the session are ended.
+// waiting on the session are ended, and invocation handlers still running
+// see their ctx cancelled (see session.over).
 func (c *Connection) teardown(s *session, graceful bool) {
 	if !graceful || !c.leave(s) {
 		s.peer.closeNow() // lost, or no GOODBYE: nothing more to say
@@ -512,6 +686,26 @@ func (c *Connection) registrationEvicted(id nxwamp.ID) {
 		c.log.Warn("Registration taken over by another session (force_reregister); "+
 			"it is registered again after the next reconnect", "procedure", procedure, "registration", id)
 	}()
+}
+
+// deniedForGood records a fatal auth refusal of a FailOnAuthError connection
+// and reports whether it is final: at once while the connection has never
+// been established, so that Start fails fast; afterwards once the refusal
+// persists (see Config.FailOnAuthError).
+func (c *Connection) deniedForGood(denial *authDenial, reason string) bool {
+	c.mu.Lock()
+	established := c.established
+	c.mu.Unlock()
+	if !established {
+		return true
+	}
+	persists, first := denial.refused()
+	if first && !persists {
+		c.log.Warn("Access refused; reconnecting, as the router also refuses while it cannot verify access: "+
+			"the refusal is final only once it persists", "reason", reason,
+			"attempts", c.t.authDenialAttempts, "for", c.t.authDenialGrace)
+	}
+	return persists
 }
 
 // failAuth stops the connection for good after a fatal auth denial.

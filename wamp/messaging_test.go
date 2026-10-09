@@ -200,6 +200,30 @@ func TestEventHandlerCanCallWithoutDeadlock(t *testing.T) {
 	}
 }
 
+// A panicking invocation handler is answered with wamp.error.runtime_error
+// and a message naming the panic, in valid UTF-8 even when the panic value is
+// not: autobahn-python (the Python SDK) drops its session over an invalid
+// string.
+func TestHandlerPanicMessageIsValidUTF8(t *testing.T) {
+	tr := newTestRouter(t, true)
+	c, _ := startTestConn(t, tr)
+	caller := tr.local(t)
+	if _, err := c.Register(ctxTimeout(t, 5*time.Second), "panicky", func(context.Context, *Invocation) (any, error) {
+		panic("bad frame \xff\xfe")
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err := localCall(t, caller, "panicky")
+	var rpcErr client.RPCError
+	if !errors.As(err, &rpcErr) || string(rpcErr.Err.Error) != URIRuntimeError {
+		t.Fatalf("Call = %v, want %s", err, URIRuntimeError)
+	}
+	want := nxwamp.List{"procedure 'panicky' panicked: bad frame ��"}
+	if !reflect.DeepEqual(rpcErr.Err.Arguments, want) {
+		t.Fatalf("error args = %+q, want %+q", rpcErr.Err.Arguments, want)
+	}
+}
+
 func TestEventsDeliveredInOrderAndPanicsRecovered(t *testing.T) {
 	tr := newTestRouter(t, true)
 	c, logs := startTestConn(t, tr)
@@ -334,10 +358,12 @@ func TestReconnectRestoresSubscriptionsAndRegistrations(t *testing.T) {
 	}
 }
 
+// A failed restore is retried after the next reconnect, too (here before any
+// retry while the session lasts).
 func TestFailedRestoreIsRetriedNextReconnect(t *testing.T) {
 	tr := newTestRouter(t, true)
 	connects := make(chan struct{}, 8)
-	c, logs := startTestConn(t, tr, func(cfg *Config, _ *Connection) {
+	c, logs := startTestConn(t, tr, restoreRetry(time.Hour, time.Hour), func(cfg *Config, _ *Connection) {
 		cfg.OnConnect = func() { connects <- struct{}{} }
 	})
 	recv(t, connects, "OnConnect")
@@ -384,10 +410,184 @@ func TestFailedRestoreIsRetriedNextReconnect(t *testing.T) {
 	}
 }
 
+// restoreRetry sets the backoff of the retries of a failed restore.
+func restoreRetry(first, maxDelay time.Duration) connOption {
+	return func(_ *Config, c *Connection) {
+		c.t.restoreRetryFirstDelay, c.t.restoreRetryMaxDelay = first, maxDelay
+	}
+}
+
+// failedRestore subscribes topic and registers proc, then makes their
+// restore after a reconnect fail: the router refuses them until the test
+// allows them again.
+func failedRestore(t *testing.T, tr *testRouter, c *Connection, connects <-chan struct{}, topic, proc string) (*Subscription, chan *Event, *Registration) {
+	t.Helper()
+	ctx := ctxTimeout(t, 10*time.Second)
+	handler, events := eventCollector(8)
+	sub, err := c.Subscribe(ctx, topic, handler, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := c.Register(ctx, proc, echoHandler("ok:"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.authz.setDeny("subscribe:"+topic, true)
+	tr.authz.setDeny("register:"+proc, true)
+	tr.ln.dropAll()
+	recv(t, connects, "OnConnect after the reconnect")
+	if sub.Active() || reg.Active() {
+		t.Fatalf("restored although refused: subscription %v, registration %v", sub.Active(), reg.Active())
+	}
+	return sub, events, reg
+}
+
+// A restore the router refuses is retried while the session stays up:
+// ironflock-router refuses a REGISTER of a device function, for one, while
+// its identity check cannot reach the authorizer (it fails closed), and an
+// entry refused at restore was accepted before (finding 40).
+func TestFailedRestoreIsRetriedWhileTheSessionLasts(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 8)
+	c, logs := startTestConn(t, tr, restoreRetry(20*time.Millisecond, 80*time.Millisecond), func(cfg *Config, _ *Connection) {
+		cfg.OnConnect = func() { connects <- struct{}{} }
+	})
+	recv(t, connects, "OnConnect")
+	sub, events, reg := failedRestore(t, tr, c, connects, "retry.topic", "retry.proc")
+
+	// Refused again, at least once each.
+	eventually(t, 5*time.Second, "retries", func() bool {
+		return tr.authz.count("subscribe:retry.topic") >= 3 && tr.authz.count("register:retry.proc") >= 3
+	})
+	tr.authz.setDeny("subscribe:retry.topic", false)
+	tr.authz.setDeny("register:retry.proc", false)
+	eventually(t, 5*time.Second, "the entries to be restored", func() bool { return sub.Active() && reg.Active() })
+
+	pub := tr.local(t)
+	localPublish(t, pub, "retry.topic", nxwamp.List{"back"}, nil)
+	recv(t, events, "an event on the restored subscription")
+	if res, err := localCall(t, pub, "retry.proc", 1); err != nil || res.Arguments[0] != "ok:1" {
+		t.Fatalf("call of the restored registration = %v, %v", res, err)
+	}
+	noRecv(t, connects, "a reconnect")
+	out := logs.String()
+	if n := strings.Count(out, "level=WARN msg=\"Failed to restore subscription"); n != 1 {
+		t.Fatalf("refused subscription restore warned %d times, want once:\n%s", n, out)
+	}
+	if n := strings.Count(out, "level=WARN msg=\"Failed to restore registration"); n != 1 {
+		t.Fatalf("refused registration restore warned %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "Subscription restored") || !strings.Contains(out, "Registration restored") {
+		t.Fatalf("the late restores not logged:\n%s", out)
+	}
+}
+
+// What is removed meanwhile is not retried, and once nothing is left the
+// retries end.
+func TestRestoreRetriesSkipRemovedEntries(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 8)
+	c, _ := startTestConn(t, tr, restoreRetry(20*time.Millisecond, 40*time.Millisecond), func(cfg *Config, _ *Connection) {
+		cfg.OnConnect = func() { connects <- struct{}{} }
+	})
+	recv(t, connects, "OnConnect")
+	sub, _, reg := failedRestore(t, tr, c, connects, "removed.topic", "removed.proc")
+	eventually(t, 5*time.Second, "a retry", func() bool {
+		return tr.authz.count("subscribe:removed.topic") >= 3 && tr.authz.count("register:removed.proc") >= 3
+	})
+
+	ctx := ctxTimeout(t, 5*time.Second)
+	if err := sub.Unsubscribe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Unregister(ctx); err != nil {
+		t.Fatal(err)
+	}
+	subscribes, registers := tr.authz.count("subscribe:removed.topic"), tr.authz.count("register:removed.proc")
+	time.Sleep(200 * time.Millisecond) // several retry periods
+	if n, m := tr.authz.count("subscribe:removed.topic"), tr.authz.count("register:removed.proc"); n != subscribes || m != registers {
+		t.Fatalf("retried after the removal: %d SUBSCRIBE, %d REGISTER", n-subscribes, m-registers)
+	}
+	eventually(t, 5*time.Second, "the retries to end", func() bool { return countGoroutines("(*Connection).retryRestore") == 0 })
+}
+
+// The retries end with their session — the next join's restore takes over —
+// and with Stop, even while they wait for their next attempt.
+func TestRestoreRetriesEndWithTheSession(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 8)
+	c, _ := startTestConn(t, tr, restoreRetry(time.Hour, time.Hour), func(cfg *Config, _ *Connection) {
+		cfg.OnConnect = func() { connects <- struct{}{} }
+	})
+	recv(t, connects, "OnConnect")
+	sub, _, reg := failedRestore(t, tr, c, connects, "ended.topic", "ended.proc")
+	eventually(t, 5*time.Second, "the retries to wait", func() bool { return countGoroutines("(*Connection).retryRestore") == 1 })
+
+	// The next session restores everything: no retries.
+	tr.authz.setDeny("subscribe:ended.topic", false)
+	tr.authz.setDeny("register:ended.proc", false)
+	tr.ln.dropAll()
+	recv(t, connects, "OnConnect after the reconnect")
+	if !sub.Active() || !reg.Active() {
+		t.Fatal("not restored by the next join")
+	}
+	eventually(t, 5*time.Second, "the retries to end with their session", func() bool {
+		return countGoroutines("(*Connection).retryRestore") == 0
+	})
+
+	// Refused again, and stopped.
+	tr.authz.setDeny("subscribe:ended.topic", true)
+	tr.ln.dropAll()
+	recv(t, connects, "OnConnect after the second reconnect")
+	eventually(t, 5*time.Second, "the retries to wait", func() bool { return countGoroutines("(*Connection).retryRestore") == 1 })
+	begin := time.Now()
+	if err := c.Stop(ctxTimeout(t, 5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if el := time.Since(begin); el > time.Second {
+		t.Fatalf("Stop took %v", el)
+	}
+	eventually(t, 5*time.Second, "the retries to end with Stop", func() bool {
+		return countGoroutines("(*Connection).retryRestore") == 0
+	})
+}
+
+// A registration another session took over (force_reregister) is not a
+// failed restore: the retries leave it to the next reconnect, so two app
+// instances do not keep taking the procedure from each other.
+func TestRestoreRetriesLeaveTakenOverRegistrations(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 8)
+	first, _ := startTestConn(t, tr, restoreRetry(20*time.Millisecond, 40*time.Millisecond), func(cfg *Config, _ *Connection) {
+		cfg.OnConnect = func() { connects <- struct{}{} }
+	})
+	recv(t, connects, "OnConnect")
+	ctx := ctxTimeout(t, 10*time.Second)
+	taken, err := first.Register(ctx, "taken.proc", echoHandler("first:"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedRestore(t, tr, first, connects, "other.topic", "other.proc") // the retries run
+	second, _ := startTestConn(t, tr)
+	if _, err := second.Register(ctx, "taken.proc", echoHandler("second:"), nil); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "the taken-over registration to turn inactive", func() bool { return !taken.Active() })
+	registers := tr.authz.count("register:taken.proc")
+	retries := tr.authz.count("register:other.proc")
+	eventually(t, 5*time.Second, "several retries", func() bool { return tr.authz.count("register:other.proc") >= retries+3 })
+	if n := tr.authz.count("register:taken.proc"); n != registers {
+		t.Fatalf("the taken-over registration was registered again %d times", n-registers)
+	}
+	if res, err := localCall(t, tr.local(t), "taken.proc", 1); err != nil || res.Arguments[0] != "second:1" {
+		t.Fatalf("call = %v, %v", res, err)
+	}
+}
+
 func TestSubscribeAndRegisterWhileInactiveRetries(t *testing.T) {
 	tr := newTestRouter(t, true)
 	connects := make(chan struct{}, 8)
-	c, _ := startTestConn(t, tr, func(cfg *Config, _ *Connection) {
+	c, _ := startTestConn(t, tr, restoreRetry(time.Hour, time.Hour), func(cfg *Config, _ *Connection) {
 		cfg.OnConnect = func() { connects <- struct{}{} }
 	})
 	recv(t, connects, "OnConnect")

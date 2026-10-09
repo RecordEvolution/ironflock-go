@@ -3,8 +3,10 @@ package wamp
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -99,7 +101,8 @@ func TestStartAfterFailedStart(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tr := newTestRouter(t, false)
-			var opts []connOption
+			var dials atomic.Int32
+			opts := []connOption{countDials(&dials)}
 			if tt.opt != nil {
 				opts = append(opts, tt.opt)
 			}
@@ -112,10 +115,7 @@ func TestStartAfterFailedStart(t *testing.T) {
 			if !closed(c.done) {
 				t.Fatal("supervisor still running after Start returned")
 			}
-			// Count upgrade requests: without the realm no join gets further.
-			n := len(tr.protocols())
-			time.Sleep(60 * time.Millisecond) // several retry periods
-			if len(tr.protocols()) != n {
+			if stillDialing(&dials) {
 				t.Fatal("still connecting after a failed Start")
 			}
 			if c.IsOpen() {
@@ -137,6 +137,42 @@ func TestStartAfterFailedStart(t *testing.T) {
 				t.Fatalf("Publish after the second Start: %v", err)
 			}
 		})
+	}
+}
+
+// countDials counts the connection's TCP dials. Dials run on its
+// supervisor, so once the supervisor has exited the count is final; the
+// router's side would also count a request of an attempt that was abandoned
+// as Start returned, which reaches the server later (finding 37).
+func countDials(dials *atomic.Int32) connOption {
+	return func(_ *Config, c *Connection) { c.t.onDial = func() { dials.Add(1) } }
+}
+
+// stillDialing reports whether the connection whose dials are counted dials
+// again within several retry periods of fastTunables.
+func stillDialing(dials *atomic.Int32) bool {
+	n := dials.Load()
+	time.Sleep(60 * time.Millisecond)
+	return dials.Load() != n
+}
+
+// The check of TestStartAfterFailedStart sees a connection that keeps
+// retrying.
+func TestStillDialingSeesRetries(t *testing.T) {
+	tr := newTestRouter(t, false)
+	var dials atomic.Int32
+	c, _ := newTestConn(t, tr, countDials(&dials))
+	started := make(chan error, 1)
+	go func() { started <- c.Start(context.Background()) }()
+	eventually(t, 5*time.Second, "a dial", func() bool { return dials.Load() > 0 })
+	if !stillDialing(&dials) {
+		t.Fatal("no dial seen from a connection that keeps retrying")
+	}
+	if err := c.Stop(ctxTimeout(t, 5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := recv(t, started, "Start"); !errors.Is(err, ErrStopped) {
+		t.Fatalf("Start = %v, want ErrStopped", err)
 	}
 }
 
@@ -206,6 +242,125 @@ func TestStopRacingFailedStartIsFinal(t *testing.T) {
 	}
 }
 
+// waitParkedOnMutex waits until a goroutine running fn is parked on a
+// sync.Mutex, and reports an error to t if none is within 5s. It may run on
+// any goroutine.
+func waitParkedOnMutex(t *testing.T, fn string) {
+	buf := make([]byte, 1<<20)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		n := runtime.Stack(buf, true)
+		if n == len(buf) {
+			buf = make([]byte, 2*len(buf))
+			continue
+		}
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			header, _, _ := strings.Cut(g, "\n")
+			if strings.Contains(header, "[sync.Mutex.Lock") && strings.Contains(g, fn) {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("no goroutine in %s parked on a mutex", fn)
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// When Start's wait ends — its ctx, or FirstConnectTimeout — just as the
+// first join completes, Start reports the session it announced, instead of
+// failing and closing it without OnDisconnect (finding 36). The test makes
+// the wait end while the supervisor publishes the session, and lets the
+// supervisor go on only once Start has decided to give up.
+func TestStartSucceedsWhenTheSessionComesUpAsTheWaitEnds(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  func(t *testing.T, cancel context.CancelFunc) connOption
+	}{
+		{"ctx", func(t *testing.T, cancel context.CancelFunc) connOption {
+			return func(_ *Config, c *Connection) {
+				c.t.beforePublish = func() {
+					cancel()
+					waitParkedOnMutex(t, "(*Connection).abortStart")
+				}
+			}
+		}},
+		{"first-connect timeout", func(t *testing.T, _ context.CancelFunc) connOption {
+			return func(cfg *Config, c *Connection) {
+				cfg.FailOnAuthError = true
+				cfg.FirstConnectTimeout = 100 * time.Millisecond
+				c.t.beforePublish = func() { waitParkedOnMutex(t, "(*Connection).abortStart") }
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newTestRouter(t, true)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			connects := make(chan struct{}, 4)
+			disconnects := make(chan string, 4)
+			var hooked sync.Once
+			c, logs := newTestConn(t, tr, func(cfg *Config, c *Connection) {
+				cfg.OnConnect = func() { connects <- struct{}{} }
+				cfg.OnDisconnect = func(reason string) { disconnects <- reason }
+				tt.opt(t, cancel)(cfg, c)
+				hook := c.t.beforePublish
+				c.t.beforePublish = func() { hooked.Do(hook) }
+			})
+			if err := c.Start(ctx); err != nil {
+				t.Fatalf("Start = %v, want nil: the session came up\n%s", err, logs)
+			}
+			recv(t, connects, "OnConnect")
+			if !c.IsOpen() {
+				t.Fatal("not open after a successful Start")
+			}
+			if err := c.Publish(ctxTimeout(t, 5*time.Second), "after.start", nil, nil, &PublishOptions{Acknowledge: true}, 0); err != nil {
+				t.Fatalf("Publish on the session: %v", err)
+			}
+			noRecv(t, disconnects, "OnDisconnect")
+			noRecv(t, connects, "a second OnConnect")
+		})
+	}
+}
+
+// Starts with very short deadlines, most of which end around the join: each
+// session announced is a successful Start's, so one successful Start means
+// one OnConnect, and no OnDisconnect.
+func TestStartStormAnnouncesOnlyTheSuccessfulStart(t *testing.T) {
+	tr := newTestRouter(t, true)
+	for round := range 40 {
+		var connects, disconnects atomic.Int32
+		c, _ := newTestConn(t, tr, func(cfg *Config, _ *Connection) {
+			cfg.OnConnect = func() { connects.Add(1) }
+			cfg.OnDisconnect = func(string) { disconnects.Add(1) }
+		})
+		for attempt := 0; ; attempt++ {
+			if attempt == 1000 {
+				t.Fatalf("round %d: no Start succeeded", round)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(rand.IntN(5))*time.Millisecond)
+			err := c.Start(ctx)
+			cancel()
+			if err == nil {
+				break
+			}
+		}
+		if err := c.Stop(ctxTimeout(t, 5*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		// The supervisors have exited, so every callback is queued: run one
+		// behind them.
+		barrier := make(chan struct{})
+		c.runCallback("barrier", func() { close(barrier) })
+		recv(t, barrier, "the callbacks")
+		if n, m := connects.Load(), disconnects.Load(); n != 1 || m != 0 {
+			t.Fatalf("round %d: OnConnect called %d times and OnDisconnect %d times for one successful Start", round, n, m)
+		}
+	}
+}
+
 func TestFailOnAuthErrorStopsAtWrongSecret(t *testing.T) {
 	tr := newTestRouter(t, true)
 	var calls atomic.Int32
@@ -254,28 +409,142 @@ func TestFailOnAuthErrorStopsAtWrongSecret(t *testing.T) {
 	}
 }
 
-func TestFatalSessionCloseWithFailOnAuthError(t *testing.T) {
-	tr := newTestRouter(t, true)
-	reasons := make(chan string, 4)
-	c, _ := startTestConn(t, tr, func(cfg *Config, _ *Connection) {
-		cfg.FailOnAuthError = true
-		cfg.OnAuthFailure = func(reason string) { reasons <- reason }
-	})
+// reasonAccessRevoked is the close reason of a session whose cross-app grant
+// the platform revoked; the platform then refuses the session's re-HELLO
+// with wamp.error.authentication_failed.
+const reasonAccessRevoked = "ironflock.close.access_revoked"
 
-	// The grant is revoked while the session is up.
-	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", URINotAuthorized, "revoked", 0); n != 1 {
+// denialGrace shortens the time a refusal must persist to be final.
+func denialGrace(grace time.Duration) connOption {
+	return func(_ *Config, c *Connection) { c.t.authDenialGrace = grace }
+}
+
+// Once a FailOnAuthError connection has been established, a refusal is not
+// final at once: ironflock-router refuses with authentication_failed also
+// while it cannot verify the credential (an authenticator or database
+// outage). A refusal that passes is ridden out like any reconnect (finding
+// 20).
+func TestTransientDenialAfterJoinIsRiddenOut(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 4)
+	disconnects := make(chan string, 4)
+	failures := make(chan string, 4)
+	c, logs := startTestConn(t, tr, denialGrace(time.Minute), func(cfg *Config, _ *Connection) {
+		cfg.FailOnAuthError = true
+		cfg.OnConnect = func() { connects <- struct{}{} }
+		cfg.OnDisconnect = func(reason string) { disconnects <- reason }
+		cfg.OnAuthFailure = func(reason string) { failures <- reason }
+	})
+	recv(t, connects, "OnConnect")
+	handler, events := eventCollector(4)
+	if _, err := c.Subscribe(ctxTimeout(t, 5*time.Second), "after.outage", handler, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The connection drops while the platform cannot verify the credential.
+	tr.keys.set(testAuthID, "unverifiable")
+	joins := len(tr.auth.attempts())
+	tr.ln.dropAll()
+	recv(t, disconnects, "OnDisconnect")
+	eventually(t, 5*time.Second, "refused re-HELLOs", func() bool { return len(tr.auth.attempts()) >= joins+3 })
+	tr.keys.set(testAuthID, testSecret)
+
+	recv(t, connects, "OnConnect once the platform verifies again")
+	noRecv(t, failures, "OnAuthFailure for a refusal that passed")
+	if !c.IsOpen() {
+		t.Fatal("not open")
+	}
+	localPublish(t, tr.local(t), "after.outage", nxwamp.List{"back"}, nil)
+	recv(t, events, "an event on the restored subscription")
+	if !strings.Contains(logs.String(), "final only once it persists") {
+		t.Fatalf("the refusal grace not logged:\n%s", logs)
+	}
+}
+
+// The platform's revocation: the session is closed with
+// ironflock.close.access_revoked, and every re-HELLO is refused. That
+// persists: once refused for the grace — at least 3 attempts — the
+// connection stops for good, and OnAuthFailure is called once.
+func TestPersistentDenialAfterJoinIsFinal(t *testing.T) {
+	tr := newTestRouter(t, true)
+	const grace = 300 * time.Millisecond
+	connects := make(chan struct{}, 4)
+	disconnects := make(chan string, 4)
+	var failures atomic.Int32
+	failed := make(chan string, 4)
+	c, logs := startTestConn(t, tr, denialGrace(grace), func(cfg *Config, _ *Connection) {
+		cfg.FailOnAuthError = true
+		cfg.OnConnect = func() { connects <- struct{}{} }
+		cfg.OnDisconnect = func(reason string) { disconnects <- reason }
+		cfg.OnAuthFailure = func(reason string) {
+			failures.Add(1)
+			failed <- reason
+		}
+	})
+	recv(t, connects, "OnConnect")
+	joins := len(tr.auth.attempts())
+
+	tr.keys.set(testAuthID, "revoked")
+	revoked := time.Now()
+	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", reasonAccessRevoked, "access revoked", 0); n != 1 {
 		t.Fatalf("killed %d sessions", n)
 	}
-	if got := recv(t, reasons, "OnAuthFailure"); got != URINotAuthorized {
-		t.Fatalf("OnAuthFailure(%q)", got)
+	if got := recv(t, disconnects, "OnDisconnect"); got != reasonAccessRevoked {
+		t.Fatalf("OnDisconnect(%q), want %q", got, reasonAccessRevoked)
 	}
+	if got := recv(t, failed, "OnAuthFailure"); got != URIAuthenticationFailed {
+		t.Fatalf("OnAuthFailure(%q), want %q", got, URIAuthenticationFailed)
+	}
+	if el := time.Since(revoked); el < grace {
+		t.Fatalf("final after %v, before the refusals lasted %v\n%s", el, grace, logs)
+	}
+	refused := len(tr.auth.attempts()) - joins
+	if refused < 3 {
+		t.Fatalf("final after %d refused attempts, want at least 3", refused)
+	}
+
 	err := c.WaitSession(context.Background(), 50*time.Millisecond)
 	var authErr *AuthError
-	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != URINotAuthorized {
-		t.Fatalf("WaitSession = %v", err)
+	if !errors.Is(err, ErrStopped) || !errors.As(err, &authErr) || authErr.Reason != URIAuthenticationFailed {
+		t.Fatalf("WaitSession = %v, want ErrStopped wrapping the *AuthError", err)
 	}
-	if n := len(tr.auth.attempts()); n != 1 {
-		t.Fatalf("reconnected after a fatal close: %d joins", n)
+	if _, err := c.Call(context.Background(), "x.y", nil, nil, nil, 0); !errors.Is(err, ErrStopped) {
+		t.Fatalf("Call = %v, want ErrStopped", err)
+	}
+	time.Sleep(60 * time.Millisecond) // several retry periods
+	if n := len(tr.auth.attempts()) - joins; n != refused {
+		t.Fatalf("%d attempts after the denial was final", n-refused)
+	}
+	if n := failures.Load(); n != 1 {
+		t.Fatalf("OnAuthFailure called %d times", n)
+	}
+	noRecv(t, connects, "a reconnect")
+}
+
+// A session the router ends with an auth reason is not final by itself
+// either: the next join decides, and here it succeeds.
+func TestAuthCloseAfterJoinReconnects(t *testing.T) {
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 4)
+	disconnects := make(chan string, 4)
+	failures := make(chan string, 4)
+	c, _ := startTestConn(t, tr, func(cfg *Config, _ *Connection) {
+		cfg.FailOnAuthError = true
+		cfg.OnConnect = func() { connects <- struct{}{} }
+		cfg.OnDisconnect = func(reason string) { disconnects <- reason }
+		cfg.OnAuthFailure = func(reason string) { failures <- reason }
+	})
+	recv(t, connects, "OnConnect")
+	if n := tr.r.KillSessionsByAuthrole(testRealm, "device", URINotAuthorized, "denied", 0); n != 1 {
+		t.Fatalf("killed %d sessions", n)
+	}
+	if got := recv(t, disconnects, "OnDisconnect"); got != URINotAuthorized {
+		t.Fatalf("OnDisconnect(%q), want %q", got, URINotAuthorized)
+	}
+	recv(t, connects, "OnConnect after the reconnect")
+	noRecv(t, failures, "OnAuthFailure")
+	if !c.IsOpen() {
+		t.Fatal("not open")
 	}
 }
 
@@ -430,7 +699,8 @@ func TestNoSuchRealmStreakWidensAndResets(t *testing.T) {
 
 func TestFirstConnectTimeoutWithFailOnAuthError(t *testing.T) {
 	tr := newTestRouter(t, false)
-	c, _ := newTestConn(t, tr, func(cfg *Config, _ *Connection) {
+	var dials atomic.Int32
+	c, _ := newTestConn(t, tr, countDials(&dials), func(cfg *Config, _ *Connection) {
 		cfg.FailOnAuthError = true
 		cfg.FirstConnectTimeout = 200 * time.Millisecond
 	})
@@ -445,10 +715,10 @@ func TestFirstConnectTimeoutWithFailOnAuthError(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("Start took %v", time.Since(start))
 	}
-	// Torn down: no further attempts, but not stopped for good.
-	n := len(tr.auth.attempts())
-	time.Sleep(60 * time.Millisecond)
-	if len(tr.auth.attempts()) != n {
+	// Torn down: no further attempts (the router refuses them for the
+	// missing realm before authentication, so only dials show them), but not
+	// stopped for good.
+	if stillDialing(&dials) {
 		t.Fatal("still connecting after a failed Start")
 	}
 	if err := c.WaitSession(context.Background(), time.Millisecond); !errors.Is(err, ErrNotConnected) {

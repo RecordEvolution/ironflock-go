@@ -76,9 +76,9 @@ var (
 )
 
 // AuthError reports that the router refused this connection's credentials or
-// role (a reason IsFatalAuthReason accepts). It is fatal only for
-// connections with FailOnAuthError set; the primary connection keeps
-// retrying.
+// role (a reason IsFatalAuthReason accepts) for good. It is fatal only for
+// connections with FailOnAuthError set (see there for when a refusal counts
+// as for good); the primary connection keeps retrying.
 type AuthError struct {
 	Realm  string
 	Reason string
@@ -112,20 +112,30 @@ type Config struct {
 	AuthSecret string
 
 	// FailOnAuthError treats an authentication/authorization denial (a reason
-	// IsFatalAuthReason accepts) as fatal: reconnecting stops, OnAuthFailure
-	// is called, and a pending Start returns an *AuthError. It also bounds Start
-	// by FirstConnectTimeout. Used for consumed-app connections; the primary
+	// IsFatalAuthReason accepts: a refused join, or a session the router
+	// closes with such a reason) as fatal: reconnecting stops, OnAuthFailure
+	// is called, and operations fail with ErrStopped wrapping an *AuthError.
+	// Before the connection has been established a denial is fatal at once,
+	// and Start returns the *AuthError. Once it has been established, a
+	// denial is fatal only when it persists — 3 refusals or more since the
+	// last join, the first one at least 60s ago — since ironflock-router
+	// refuses the same way while it cannot verify access (see
+	// IsFatalAuthReason); until then the connection reconnects as after any
+	// other failure. FailOnAuthError also bounds Start by
+	// FirstConnectTimeout. Used for consumed-app connections; the primary
 	// connection retries through every failure.
 	FailOnAuthError bool
-	// OnAuthFailure is called (once, on its own goroutine) with the close
-	// reason when FailOnAuthError stops the connection.
+	// OnAuthFailure is called (once, on its own goroutine) with the reason
+	// of the last refusal when FailOnAuthError stops the connection.
 	OnAuthFailure func(reason string)
 
 	// OnConnect is called (on its own goroutine) after every successful join,
 	// once subscriptions and registrations are restored.
 	OnConnect func()
 	// OnDisconnect is called (on its own goroutine) when an established
-	// session is lost, with the close reason if one is known.
+	// session is lost, with the close reason if one is known. Every
+	// OnConnect is followed by one OnDisconnect, unless Stop ends the
+	// session.
 	OnDisconnect func(reason string)
 
 	// SessionWaitTimeout overrides DefaultSessionWaitTimeout.
@@ -157,8 +167,11 @@ type Config struct {
 // of continuous no_such_realm refusals the cap widens to
 // NoSuchRealmMaxRetryDelay until the realm appears or any other close reason
 // is seen. After each join every tracked subscription and registration is
-// restored; one that fails to restore stays tracked and is retried on the
-// next reconnect.
+// restored. One that fails to restore stays tracked and is retried while the
+// session lasts — after 1s, doubling up to 30s, with ±15% jitter: the
+// router accepted it before, so its refusal is a passing one, such as
+// ironflock-router's identity check failing closed while its authorizer is
+// unavailable — and again after every reconnect.
 //
 // Contexts: every operation waits for a session within its context (and its
 // wait window). Subscribe, Register, Unsubscribe, UnsubscribeTopic and
@@ -167,10 +180,12 @@ type Config struct {
 // a reconnect. When the context ends first, a Subscribe or Register returns
 // its error having sent nothing; an Unsubscribe, UnsubscribeTopic or
 // Unregister returns it too, but has taken effect locally already and tells
-// the router in the background (see Unsubscribe). A Call is cancelled at the
-// router when its context ends. The router round trip of Publish, Subscribe,
-// Register, Unsubscribe and Unregister is not interruptible once sent; it is
-// bounded by the router response timeout (DefaultSessionWaitTimeout).
+// the router in the background (see Unsubscribe). A Call returns its
+// context's error as soon as the context ends, and the router is told to
+// cancel the call in the background (see Call). The router round trip of
+// Publish, Subscribe, Register, Unsubscribe and Unregister is not
+// interruptible once sent; it is bounded by the router response timeout
+// (DefaultSessionWaitTimeout).
 type Connection struct {
 	cfg     Config
 	log     *slog.Logger
@@ -190,6 +205,7 @@ type Connection struct {
 	endSupervisor context.CancelFunc
 	done          chan struct{} // closed when the last Start's supervisor exits; nil before Start
 	sess          *session      // current, restored session; nil while down
+	established   bool          // a session has been published once
 	upCh          chan struct{} // closed while sess is set, replaced when it goes
 	peer          *observedPeer // WebSocket of the current session or join
 	fatal         *AuthError
@@ -311,6 +327,10 @@ func (c *Connection) Configure(cfg Config) error {
 // FailOnAuthError the wait is additionally bounded by FirstConnectTimeout,
 // and a fatal auth denial returns an *AuthError immediately.
 //
+// When the wait ends — ctx, or FirstConnectTimeout — just as the first join
+// completes, Start returns nil: a session announced through OnConnect is
+// never torn down by a failing Start.
+//
 // When Start fails, its supervisor has exited by the time it returns, so no
 // further attempt is made; an attempt still in its WebSocket handshake is
 // abandoned at once. Unless the connection was stopped for good — by Stop, or
@@ -360,7 +380,9 @@ func (c *Connection) Start(ctx context.Context) error {
 	case <-timeout:
 		err = &connectTimeoutError{realm: c.cfg.Realm, timeout: c.cfg.FirstConnectTimeout}
 	}
-	c.abortStart(done)
+	if !c.abortStart(done) {
+		return nil // the session came up just as the wait ended
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -382,8 +404,21 @@ func (c *Connection) Start(ctx context.Context) error {
 //
 // The supervisor must be gone before Start may run again: it reads and
 // writes the connection's session state until it exits.
-func (c *Connection) abortStart(done <-chan struct{}) {
+//
+// It aborts nothing, and reports false, when the supervisor has published
+// its session already — the wait ended just as the join completed, and
+// OnConnect is on its way — and the connection is not stopped: the Start has
+// succeeded after all. The check and the end of the supervisor are one
+// critical section, as is establish's check of the supervisor's context and
+// its publishing of the session, so exactly one of them wins. When Start
+// begins c.sess is nil (a failed Start's supervisor withdraws its session
+// before it exits), so a session found here is this Start's.
+func (c *Connection) abortStart(done <-chan struct{}) (aborted bool) {
 	c.mu.Lock()
+	if c.sess != nil && !c.stopped {
+		c.mu.Unlock()
+		return false
+	}
 	c.endSupervisor()
 	c.mu.Unlock()
 	timer := time.NewTimer(c.t.startTeardown)
@@ -400,6 +435,7 @@ func (c *Connection) abortStart(done <-chan struct{}) {
 	if !c.stopped {
 		c.started = false
 	}
+	return true
 }
 
 // stopInternal marks the connection stopped and cancels the supervisor. It
@@ -563,17 +599,40 @@ func (c *Connection) sleep(ctx context.Context, d time.Duration) error {
 // is back), or the callee's WAMP client refuses the call with
 // wamp.error.invalid_argument "client has no handler for registration …"
 // because the call overtook its registration (nexus clients install the
-// handler only after REGISTERED) — sleeping RetryFirstDelay, doubling up to
-// RetryMaxDelay, as long as the next attempt still starts within the window.
+// handler only after REGISTERED), or its callee is unregistering it (see
+// Unregister) — sleeping RetryFirstDelay, doubling up to RetryMaxDelay, as
+// long as the next attempt still starts within the window.
 // In all these cases the call never reached a handler, so a retry cannot run
-// it twice. Every other error, including a connection lost mid-call, is
-// returned as it comes. retryWindow 0 waits the default session timeout and
-// does not retry.
+// it twice (IsNotServedYet tells these refusals). Every other error,
+// including a connection lost mid-call, is returned as it comes. retryWindow
+// 0 waits the default session timeout and does not retry.
+//
+// When ctx ends, Call returns ctx.Err() at once — also when the result is
+// arriving just then — and the router is told to cancel the call, which
+// interrupts the callee's handler. That exchange finishes in the background,
+// within the router response timeout (DefaultSessionWaitTimeout); it may
+// outlive Call, and Stop. A call whose session ends before it is answered
+// fails with an error wrapping ErrNotConnected (ErrStopped after Stop): it
+// may have run.
+//
+// opts.OnProgress receives the call's progressive results (see
+// CallOptions.OnProgress); without it, a progressive result from the callee
+// fails the call, and receive_progress in opts.Extra is refused before the
+// call is sent.
 //
 // Errors from the router or callee are returned as *Error.
 func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwargs map[string]any, opts *CallOptions, retryWindow time.Duration) (*Result, error) {
 	if err := validateURI("procedure", procedure); err != nil {
 		return nil, err
+	}
+	if opts != nil && opts.OnProgress == nil {
+		// nexus would answer the call with the first progressive result,
+		// and the next ones would race the end of the call's wait, which
+		// can wedge its receive loop (see Connection.awaitEnd).
+		if asked, _ := opts.Extra[nxwamp.OptReceiveProgress].(bool); asked {
+			return nil, fmt.Errorf("wamp: call of procedure '%s': receive_progress in CallOptions.Extra "+
+				"needs CallOptions.OnProgress", procedure)
+		}
 	}
 	var deadline time.Time
 	if retryWindow > 0 {
@@ -592,13 +651,28 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 		if err != nil {
 			return nil, err
 		}
-		res, err := s.call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs))
+		// A fresh queue per attempt: a retried attempt was refused before
+		// any handler ran, so it sent no progressive results.
+		var progress *progressQueue
+		var progcb client.ProgressHandler
+		if opts != nil && opts.OnProgress != nil {
+			progress = newProgressQueue(opts.OnProgress, c.log, procedure)
+			progcb = progress.add
+		}
+		res, err := s.call(ctx, procedure, callOptions(opts), wireArgs(args, kwargs), nxwamp.Dict(kwargs), progcb)
+		if progress != nil {
+			// nexus has handed over every progressive result that came
+			// before the final one: pass them all on. A failed call drops
+			// what is left; nexus may still be finishing it in the
+			// background, and its late results are dropped too.
+			progress.close(err != nil)
+		}
 		if err == nil {
-			return &Result{
-				Args:    normalizeList(res.Arguments),
-				Kwargs:  normalizeDict(res.ArgumentsKw),
-				Details: normalizeDict(res.Details),
-			}, nil
+			if progress == nil && isProgressive(res) {
+				return nil, fmt.Errorf("wamp: call of procedure '%s': the callee sent a progressive result, "+
+					"which needs CallOptions.OnProgress", procedure)
+			}
+			return newResult(res), nil
 		}
 		err = c.callError(procedure, err)
 		why := notServedYet(err)
@@ -618,12 +692,23 @@ func (c *Connection) Call(ctx context.Context, procedure string, args []any, kwa
 // registration (yet).
 const noHandlerYet = "client has no handler for registration"
 
+// IsNotServedYet reports whether err is the refusal of a call that reached
+// no handler because its procedure is not served yet: the router's
+// wamp.error.no_such_procedure (no callee has registered it), or the
+// callee's wamp.error.invalid_argument whose first argument starts with
+// "client has no handler for registration" — a nexus client gives that
+// answer to a call that overtook its registration (it installs the handler
+// only after REGISTERED), or that arrives while it unregisters the
+// procedure. Such a call never ran, so calling again cannot run it twice.
+// These are the refusals Call's retry window retries.
+func IsNotServedYet(err error) bool { return notServedYet(err) != "" }
+
 // notServedYet tells whether err is the refusal of a call that reached no
-// handler because its procedure is not served yet (see Call). It returns
-// why, for the log, or "" for any other error.
+// handler because its procedure is not served yet (see IsNotServedYet). It
+// returns why, for the log, or "" for any other error.
 func notServedYet(err error) string {
 	var werr *Error
-	if !errors.As(err, &werr) {
+	if !errors.As(err, &werr) || werr == nil {
 		return ""
 	}
 	switch werr.URI {
@@ -744,6 +829,9 @@ func (c *Connection) subscribeOn(ctx context.Context, s *session, sub *Subscript
 			return nil, true, nil
 		}
 		return nil, false, c.requestError("subscribe to topic '"+sub.topic+"'", subscribePrefix(sub.topic), err)
+	}
+	if hook := c.t.afterSubscribe; hook != nil {
+		hook()
 	}
 	g.sess.Store(s)
 	if !tracked {
@@ -872,6 +960,15 @@ func (c *Connection) dropSubscription(g *subGroup) error {
 // A procedure can be registered once per connection: registering it again
 // before Unregister fails with wamp.error.procedure_already_exists.
 //
+// The handler's results and *Error payloads are sent as given, encoded by
+// the WAMP client's msgpack codec — not converted the way the ironflock
+// package converts its payloads (IronFlock.RegisterDeviceFunction does that
+// for its handlers). Return JSON-like values: nil, booleans, numbers,
+// strings, []byte, []any and map[string]any. A value the codec cannot encode,
+// or that the router cannot decode — a map with non-string keys, for one —
+// never reaches the caller, who gets no answer; a string that is not valid
+// UTF-8 makes an autobahn-python caller (the Python SDK) drop its session.
+//
 // When ctx ends while Register waits for a session or for subscription
 // changes in progress, it returns ctx.Err() and has sent nothing.
 func (c *Connection) Register(ctx context.Context, procedure string, handler InvocationHandler, opts *RegisterOptions) (*Registration, error) {
@@ -933,7 +1030,7 @@ func (c *Connection) registerOn(ctx context.Context, s *session, reg *Registrati
 				"procedure", reg.procedure, "error", err)
 		}
 	}
-	if err := s.register(reg.procedure, reg.invoke, cloneDict(reg.options)); err != nil {
+	if err := s.register(reg.procedure, reg.invokeOn(s), cloneDict(reg.options)); err != nil {
 		if !s.alive() && !c.stopFlag.Load() {
 			return true, nil
 		}
@@ -945,12 +1042,18 @@ func (c *Connection) registerOn(ctx context.Context, s *session, reg *Registrati
 }
 
 // Unregister removes a registration, the way Unsubscribe removes a
-// subscription: at once, the handler is called no more — an invocation that
-// arrives before the router has dropped the registration is refused with
-// wamp.error.no_such_procedure, which callers with a retry window retry —
-// and the registration is never restored again. The router is told after
-// any subscription change in progress; when ctx ends first, Unregister
-// returns ctx.Err() and the router is told in the background.
+// subscription: at once, the handler is called no more, and the registration
+// is never restored again. Until the router has dropped it — Unregister
+// returns once it has — the router may still route calls here, and they are
+// refused without reaching the handler: with wamp.error.no_such_procedure
+// while the removal waits for a subscription change in progress, and, for
+// about one round trip once the UNREGISTER is sent, with
+// wamp.error.invalid_argument "client has no handler for registration N"
+// (the WAMP client drops the handler before it sends UNREGISTER). Call with
+// a retry window retries both (see IsNotServedYet); the Python and
+// JavaScript SDKs retry only no_such_procedure. The router is told after any
+// subscription change in progress; when ctx ends first, Unregister returns
+// ctx.Err() and the router is told in the background.
 func (c *Connection) Unregister(ctx context.Context, reg *Registration) error {
 	if reg == nil || reg.conn != c || !reg.removed.CompareAndSwap(false, true) {
 		return nil
@@ -1041,7 +1144,8 @@ func (s *Subscription) Topic() string { return s.topic }
 func (s *Subscription) Match() string { return s.match }
 
 // Active reports whether the subscription is currently live at the router —
-// false while the connection is down or after a failed restore.
+// false while the connection is down, and after a failed restore until a
+// retry succeeds.
 func (s *Subscription) Active() bool {
 	if s == nil || s.removed.Load() || s.group == nil {
 		return false
@@ -1073,7 +1177,10 @@ type Registration struct {
 // Procedure returns the registered procedure URI.
 func (r *Registration) Procedure() string { return r.procedure }
 
-// Active reports whether the registration is currently live at the router.
+// Active reports whether the registration is currently live at the router —
+// false while the connection is down, after a failed restore until a retry
+// succeeds, and once another session has taken the procedure over (until
+// the next reconnect registers it again).
 func (r *Registration) Active() bool {
 	if r == nil || r.removed.Load() {
 		return false

@@ -232,6 +232,113 @@ func TestFirstEventRightBehindSubscribedIsDelivered(t *testing.T) {
 	}
 }
 
+// The subscription's handle joins its topic's group before the SUBSCRIBE
+// goes out, and leaves it again when the SUBSCRIBE fails (findings 0 and 6;
+// pinned deterministically by the next three tests, finding 61).
+
+// inactiveTopic subscribes topic, then makes its restore fail across a
+// reconnect: the topic's group stays tracked, with one handle, but without a
+// WAMP subscription. The router keeps refusing the SUBSCRIBE of topic, and
+// the restore is not retried during the test.
+func inactiveTopic(t *testing.T, topic string) (*testRouter, *Connection, chan struct{}, chan *Event) {
+	t.Helper()
+	tr := newTestRouter(t, true)
+	connects := make(chan struct{}, 8)
+	c, _ := startTestConn(t, tr, restoreRetry(time.Hour, time.Hour), func(cfg *Config, _ *Connection) {
+		cfg.OnConnect = func() { connects <- struct{}{} }
+	})
+	recv(t, connects, "OnConnect")
+	h1, ev1 := eventCollector(8)
+	s1, err := c.Subscribe(ctxTimeout(t, 10*time.Second), topic, h1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.authz.setDeny("subscribe:"+topic, true)
+	tr.ln.dropAll()
+	recv(t, connects, "OnConnect after the reconnect")
+	if s1.Active() {
+		t.Fatal("the restore should have failed")
+	}
+	return tr, c, connects, ev1
+}
+
+// The new handle is in the topic's group while the SUBSCRIBE is at the
+// router, so an event right behind SUBSCRIBED finds it.
+func TestHandleJoinsItsGroupBeforeTheSubscribe(t *testing.T) {
+	const topic = "order.topic"
+	tr, c, _, _ := inactiveTopic(t, topic)
+	tr.authz.setDeny("subscribe:"+topic, false)
+	release := tr.authz.hold(t, "subscribe:"+topic)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Subscribe(ctxTimeout(t, 10*time.Second), topic, func(*Event) {}, nil)
+		done <- err
+	}()
+	if key := recv(t, tr.authz.held, "the router to hold the SUBSCRIBE"); key != "subscribe:"+topic {
+		t.Fatalf("the router holds %s", key)
+	}
+	n := len(c.findGroup(topic).list())
+	release()
+	if err := recv(t, done, "Subscribe"); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("the group held %d handles while the SUBSCRIBE was at the router, want 2", n)
+	}
+}
+
+// A refused SUBSCRIBE leaves no handle behind in the topic's group: the
+// refused handler gets no event once the topic is restored.
+func TestRefusedSubscribeLeavesNoHandle(t *testing.T) {
+	const topic = "refused.topic"
+	tr, c, connects, ev1 := inactiveTopic(t, topic)
+	h2, ev2 := eventCollector(8)
+	_, err := c.Subscribe(ctxTimeout(t, 10*time.Second), topic, h2, nil)
+	var werr *Error
+	if !errors.As(err, &werr) || werr.URI != URINotAuthorized {
+		t.Fatalf("Subscribe = %v, want the refusal", err)
+	}
+	if n := len(c.findGroup(topic).list()); n != 1 {
+		t.Fatalf("the group holds %d handles after the refusal, want 1", n)
+	}
+	tr.authz.setDeny("subscribe:"+topic, false)
+	tr.ln.dropAll()
+	recv(t, connects, "OnConnect after the second reconnect")
+	localPublish(t, tr.local(t), topic, nil, nil)
+	recv(t, ev1, "the event at the subscribed handler")
+	noRecv(t, ev2, "an event at the refused handler")
+}
+
+// The same for a new topic: the event right behind SUBSCRIBED reaches the
+// handler although Subscribe is still finishing after the router answered.
+func TestFirstEventOfANewTopicWhileSubscribeFinishes(t *testing.T) {
+	tr := newTestRouter(t, true)
+	firstEvents(tr)
+	handler, events := eventCollector(4)
+	got := make(chan *Event, 1)
+	c, _ := startTestConn(t, tr, func(_ *Config, c *Connection) {
+		c.t.afterSubscribe = func() {
+			// The reply gate has released the event behind SUBSCRIBED.
+			select {
+			case ev := <-events:
+				got <- ev
+			case <-time.After(time.Second):
+			}
+		}
+	})
+	if _, err := c.Subscribe(ctxTimeout(t, 10*time.Second), "new.topic", handler, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-got:
+		if ev.Args[0] != "first" {
+			t.Fatalf("event = %+v", ev)
+		}
+	default:
+		t.Fatal("the event right behind SUBSCRIBED did not reach the handler while Subscribe was finishing")
+	}
+}
+
 // A call that overtook the callee's registration is refused by the callee's
 // nexus client with wamp.error.invalid_argument "client has no handler for
 // registration N". It never reached a handler, so the retry window retries it

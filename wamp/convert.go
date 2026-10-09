@@ -167,6 +167,22 @@ func normalizeDict(m map[string]any) map[string]any {
 	return out
 }
 
+// newResult converts a WAMP RESULT message into a *Result.
+func newResult(r *nxwamp.Result) *Result {
+	return &Result{
+		Args:    normalizeList(r.Arguments),
+		Kwargs:  normalizeDict(r.ArgumentsKw),
+		Details: normalizeDict(r.Details),
+	}
+}
+
+// isProgressive reports whether r is a progressive result: one the callee
+// sends before its final result.
+func isProgressive(r *nxwamp.Result) bool {
+	progress, _ := r.Details[nxwamp.OptProgress].(bool)
+	return progress
+}
+
 // newError converts a WAMP ERROR message into an *Error.
 func newError(e *nxwamp.Error) *Error {
 	return &Error{

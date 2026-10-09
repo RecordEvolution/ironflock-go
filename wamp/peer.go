@@ -59,6 +59,10 @@ type observedPeer struct {
 	dead    *signal // Done: closed, or the connection is gone
 	closing *signal // Close was called: nobody reads Recv any more
 
+	// uplink is how long the sender has been blocked handing messages to the
+	// WebSocket writer (see deliver).
+	uplink backpressure
+
 	mu      sync.Mutex
 	abort   *nxwamp.Abort
 	goodbye *nxwamp.Goodbye
@@ -74,8 +78,8 @@ type peerOptions struct {
 	// the forwarder and must not block.
 	onEvicted func(registration nxwamp.ID)
 	// stallAfter bounds how long the client may leave a received message
-	// untaken (0: no bound). Past it the peer calls onStall, if set, and
-	// closes itself.
+	// untaken, not counting the time the uplink is backed up (0: no bound).
+	// Past it the peer calls onStall, if set, and closes itself.
 	stallAfter time.Duration
 	onStall    func(stalled time.Duration)
 	// holdLimit bounds how long the forwarder holds back a message for
@@ -148,6 +152,8 @@ func (p *observedPeer) forward() {
 // send moves the client's messages to the WebSocket peer, in order. Once the
 // peer is dead nothing can be sent any more: the sender exits, and a message
 // it holds is dropped, as if it had been written to the dead connection.
+// While the writer is busy with the messages before — the uplink is backed
+// up — the sender waits, and accounts for the wait in p.uplink.
 func (p *observedPeer) send() {
 	to := p.Peer.Send()
 	for {
@@ -156,13 +162,51 @@ func (p *observedPeer) send() {
 			p.gate.sent(msg)
 			select {
 			case to <- msg:
+				continue
+			default:
+			}
+			p.uplink.begin()
+			select {
+			case to <- msg:
+				p.uplink.end()
 			case <-p.dead.done():
+				p.uplink.end()
 				return
 			}
 		case <-p.dead.done():
 			return
 		}
 	}
+}
+
+// backpressure measures the time a sender spends blocked.
+type backpressure struct {
+	mu    sync.Mutex
+	total time.Duration // of the blocked periods that are over
+	since time.Time     // start of the current one; zero while not blocked
+}
+
+func (b *backpressure) begin() {
+	b.mu.Lock()
+	b.since = time.Now()
+	b.mu.Unlock()
+}
+
+func (b *backpressure) end() {
+	b.mu.Lock()
+	b.total += time.Since(b.since)
+	b.since = time.Time{}
+	b.mu.Unlock()
+}
+
+// blocked returns the time the sender has been blocked in all, up to now.
+func (b *backpressure) blocked(now time.Time) time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if d := now.Sub(b.since); !b.since.IsZero() && d > 0 {
+		return b.total + d
+	}
+	return b.total
 }
 
 // hold waits, before the forwarder hands over the next message, until the
@@ -279,12 +323,17 @@ func (g *replyGate) answering(msg nxwamp.Message) <-chan struct{} {
 // forwarder keeps draining and the WebSocket peer's receiver can exit.
 //
 // The receive loop takes each message within moments: the SDK runs nothing
-// on it that blocks (event handlers only queue), and nexus blocks it only
-// briefly, to hand a reply to its waiter or a message to the WebSocket
-// writer. A loop that leaves a message untaken for stallAfter is wedged — a
-// nexus client can park it for good (see Connection.awaitEnd) — and would
-// keep its session open with nothing processed: the peer is closed, which
-// ends the session.
+// on it that blocks (event handlers and progressive results only queue), and
+// nexus blocks it briefly to hand a reply to its waiter or a message to the
+// WebSocket writer. It may wait for the writer longer, though, while the
+// uplink is backed up (large publications on a slow link): nexus sends from
+// the loop (an ERROR for an INVOCATION it cannot route), and a call whose
+// ctx ended takes the reply the loop holds for it only once its CANCEL is
+// sent. So the time the sender is blocked handing messages to the writer
+// does not count. A loop that leaves a message untaken for stallAfter
+// otherwise is wedged — a nexus client can park it for good (see
+// Connection.awaitEnd) — and would keep its session open with nothing
+// processed: the peer is closed, which ends the session.
 func (p *observedPeer) deliver(msg nxwamp.Message) {
 	select {
 	case p.in <- msg:
@@ -293,28 +342,43 @@ func (p *observedPeer) deliver(msg nxwamp.Message) {
 		return
 	default:
 	}
-	var stalled <-chan time.Time
-	if p.opts.stallAfter > 0 {
-		timer := time.NewTimer(p.opts.stallAfter)
-		defer timer.Stop()
-		stalled = timer.C
-	}
-	select {
-	case p.in <- msg:
-	case <-p.closing.done():
-	case <-stalled:
-		if p.opts.onStall != nil {
-			p.opts.onStall(p.opts.stallAfter)
-		}
-		// Close on a goroutine of its own: closing the WebSocket peer waits
-		// for its receiver, which may itself be blocked handing this
-		// goroutine the next message. Closing fires at once, so the wait
-		// below ends right away unless the loop takes msg after all.
-		go p.closeNow()
+	if p.opts.stallAfter <= 0 {
 		select {
 		case p.in <- msg:
 		case <-p.closing.done():
 		}
+		return
+	}
+	begin := time.Now()
+	uplinkBefore := p.uplink.blocked(begin)
+	timer := time.NewTimer(p.opts.stallAfter)
+	defer timer.Stop()
+	for {
+		select {
+		case p.in <- msg:
+			return
+		case <-p.closing.done():
+			return
+		case <-timer.C:
+		}
+		now := time.Now()
+		stalled := now.Sub(begin) - (p.uplink.blocked(now) - uplinkBefore)
+		if stalled >= p.opts.stallAfter {
+			break
+		}
+		timer.Reset(p.opts.stallAfter - stalled)
+	}
+	if p.opts.onStall != nil {
+		p.opts.onStall(p.opts.stallAfter)
+	}
+	// Close on a goroutine of its own: closing the WebSocket peer waits for
+	// its receiver, which may itself be blocked handing this goroutine the
+	// next message. Closing fires at once, so the wait below ends right away
+	// unless the loop takes msg after all.
+	go p.closeNow()
+	select {
+	case p.in <- msg:
+	case <-p.closing.done():
 	}
 }
 
@@ -437,7 +501,8 @@ type session struct {
 	down     chan struct{}
 	downOnce sync.Once
 	// over is cancelled once the supervisor is done with the session (see
-	// Connection.teardown); it ends calls still waiting on it.
+	// Connection.teardown); it ends calls still waiting on it and cancels the
+	// ctx of invocations still running on it (see Registration.invokeOn).
 	over    context.Context
 	endOver context.CancelFunc
 }
@@ -478,17 +543,54 @@ func (s *session) register(procedure string, fn client.InvocationHandler, option
 	return s.cli.Register(procedure, fn, options)
 }
 
-// call is cli.Call, released with client.ErrNotConn when the session is
-// over. A client ends its calls itself when its receive loop exits, but a
-// wedged loop never exits, and the calls would wait on it forever.
-func (s *session) call(ctx context.Context, procedure string, options nxwamp.Dict, args nxwamp.List, kwargs nxwamp.Dict) (*nxwamp.Result, error) {
+// call is cli.Call, which returns as soon as ctx ends — with ctx's error,
+// see callOutcome — or the session is over (client.ErrNotConn). progcb, if
+// set, receives the progressive results; it runs on nexus's path from the
+// receive loop to the waiting call, so it must not block.
+//
+// nexus itself answers a call whose ctx ended only once the router has
+// confirmed the CANCEL, within the response timeout — and when the result
+// crossed the CANCEL, the router has nothing left to cancel and answers
+// nothing, so the call would wait out the timeout. And a client ends its
+// calls when its receive loop exits, which a wedged loop never does. So
+// cli.Call runs on a goroutine of its own, which finishes the CANCEL
+// exchange in the background: it may outlive call, and the session, by up to
+// the response timeout.
+func (s *session) call(ctx context.Context, procedure string, options nxwamp.Dict, args nxwamp.List, kwargs nxwamp.Dict, progcb client.ProgressHandler) (*nxwamp.Result, error) {
+	type reply struct {
+		res *nxwamp.Result
+		err error
+	}
+	replied := make(chan reply, 1)
 	callCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	stop := context.AfterFunc(s.over, cancel)
-	defer stop()
-	res, err := s.cli.Call(callCtx, procedure, options, args, kwargs, nil)
-	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
-		return nil, client.ErrNotConn // cancelled by the session's end, not by the caller
+	go func() {
+		defer cancel()
+		defer stop()
+		res, err := s.cli.Call(callCtx, procedure, options, args, kwargs, progcb)
+		replied <- reply{res, err}
+	}()
+	var r reply
+	select {
+	case r = <-replied:
+	case <-ctx.Done():
+	case <-s.over.Done():
+		r.err = client.ErrNotConn
+	}
+	return callOutcome(ctx, r.res, r.err)
+}
+
+// callOutcome is what a call returns once nexus has answered it with res and
+// err, or has not answered yet (both nil). Once ctx has ended, it is ctx's
+// error, whatever came in — a result that arrived just as ctx ended included,
+// as is the Go convention. A cancellation the caller did not ask for came
+// from the session's end: client.ErrNotConn.
+func callOutcome(ctx context.Context, res *nxwamp.Result, err error) (*nxwamp.Result, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return nil, client.ErrNotConn
 	}
 	return res, err
 }

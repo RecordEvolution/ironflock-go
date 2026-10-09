@@ -1,7 +1,9 @@
 package wamp
 
 import (
+	"cmp"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"sort"
@@ -135,9 +137,18 @@ func SerialNumber(serialNumber string) (string, error) {
 // It falls back to the legacy device-wide pair (serial, serial) when no
 // per-app credential was injected. Legacy credentials still authenticate the
 // app on its own realm; cross-app access requires the per-app pair.
+//
+// A /data/env file that exists but cannot be read — the agent makes the
+// directory readable by root only, so an app container running as another
+// user cannot read it — falls back to the environment variable, the value
+// the container started with. The first such failure in the process is
+// logged as a warning on slog.Default(), unless the ironflock package has
+// reported one on its own logger already (the warning is logged once per
+// process).
 func AppCredentials(serialNumber string) (authID, secret string) {
-	authID = env.ReadInjected("APP_AUTH_ID")
-	secret = env.ReadInjected("APP_AUTH_SECRET")
+	authID, idErr := env.Lookup("APP_AUTH_ID")
+	secret, secretErr := env.Lookup("APP_AUTH_SECRET")
+	env.WarnUnreadable(slog.Default(), cmp.Or(idErr, secretErr))
 	if authID != "" && secret != "" {
 		return authID, secret
 	}

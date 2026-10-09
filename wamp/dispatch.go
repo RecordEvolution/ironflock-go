@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
 
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
 	"github.com/gammazero/nexus/v3/client"
 	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
@@ -63,6 +65,87 @@ func (e *serialExecutor) run() {
 		e.queue = e.queue[1:]
 		e.mu.Unlock()
 		f()
+	}
+}
+
+// progressQueue passes the progressive results of one call to its
+// OnProgress handler (see CallOptions.OnProgress): in order, one at a time,
+// on a goroutine that exists only while results are queued. add, nexus's
+// progress handler, only queues: nexus hands each progressive result over on
+// its way from the client's receive loop to the waiting call, and the loop
+// waits until it is taken.
+type progressQueue struct {
+	handler   func(*Result)
+	log       *slog.Logger
+	procedure string
+
+	mu      sync.Mutex
+	queue   []*nxwamp.Result
+	closed  bool          // add drops what comes
+	running chan struct{} // closed once the delivering goroutine has exited; nil while none runs
+}
+
+func newProgressQueue(handler func(*Result), log *slog.Logger, procedure string) *progressQueue {
+	return &progressQueue{handler: handler, log: log, procedure: procedure}
+}
+
+// add queues res for the handler, unless the queue is closed. It never
+// blocks.
+func (q *progressQueue) add(res *nxwamp.Result) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.queue = append(q.queue, res)
+	if q.running == nil {
+		q.running = make(chan struct{})
+		go q.run(q.running)
+	}
+}
+
+func (q *progressQueue) run(running chan struct{}) {
+	defer close(running)
+	for {
+		q.mu.Lock()
+		if len(q.queue) == 0 {
+			q.queue = nil
+			q.running = nil
+			q.mu.Unlock()
+			return
+		}
+		res := q.queue[0]
+		q.queue[0] = nil
+		q.queue = q.queue[1:]
+		q.mu.Unlock()
+		q.pass(res)
+	}
+}
+
+func (q *progressQueue) pass(res *nxwamp.Result) {
+	defer func() {
+		if p := recover(); p != nil {
+			q.log.Error("Progress handler panicked", "procedure", q.procedure, "panic", p, "stack", string(debug.Stack()))
+		}
+	}()
+	q.handler(newResult(res))
+}
+
+// close makes add drop what comes, and waits until the handler is not
+// running any more: once it has been called for every result queued — or,
+// with drop, once the call under way has returned; the results still queued
+// are dropped.
+func (q *progressQueue) close(drop bool) {
+	q.mu.Lock()
+	q.closed = true
+	if drop {
+		clear(q.queue)
+		q.queue = nil
+	}
+	running := q.running
+	q.mu.Unlock()
+	if running != nil {
+		<-running
 	}
 }
 
@@ -162,8 +245,22 @@ func (c *Connection) runEventHandler(s *Subscription, ev *Event) {
 	s.handler(ev)
 }
 
-// invoke is the nexus invocation handler of a registration. nexus runs it on
-// a goroutine of its own per invocation. Once the registration is removed it
+// invokeOn is the nexus invocation handler of the registration on session
+// s: invoke, with ctx also cancelled once the supervisor is done with s (see
+// Connection.teardown). nexus cancels a running invocation's ctx when its
+// client ends, but a wedged client, which the supervisor abandons, never
+// ends.
+func (r *Registration) invokeOn(s *session) client.InvocationHandler {
+	return func(ctx context.Context, raw *nxwamp.Invocation) client.InvokeResult {
+		ctx, cancel := context.WithCancel(ctx) // keeps nexus's values
+		defer cancel()
+		defer context.AfterFunc(s.over, cancel)()
+		return r.invoke(ctx, raw)
+	}
+}
+
+// invoke handles an invocation of the registration. nexus runs it on a
+// goroutine of its own per invocation. Once the registration is removed it
 // refuses the call as the router does when no callee has the procedure (see
 // Connection.Unregister).
 func (r *Registration) invoke(ctx context.Context, raw *nxwamp.Invocation) client.InvokeResult {
@@ -188,7 +285,9 @@ func (c *Connection) runInvocationHandler(ctx context.Context, r *Registration, 
 	defer func() {
 		if p := recover(); p != nil {
 			c.log.Error("Procedure handler panicked", "procedure", r.procedure, "panic", p, "stack", string(debug.Stack()))
-			value, err = nil, fmt.Errorf("procedure '%s' panicked: %v", inv.Procedure, p)
+			// The message, unlike the handler's own values, is the SDK's: keep
+			// it valid UTF-8 whatever the panic value holds.
+			value, err = nil, errors.New(jsontext.ValidUTF8(fmt.Sprintf("procedure '%s' panicked: %v", inv.Procedure, p)))
 		}
 	}()
 	return r.handler(ctx, inv)

@@ -170,6 +170,96 @@ func TestObservedPeerClosesWhenClientStalls(t *testing.T) {
 	})
 }
 
+// The receive loop may wait legitimately while the uplink is backed up: nexus
+// sends from it (a CANCEL that its waiting call must hand over before it can
+// take its RESULT, an ERROR for an INVOCATION), and each send waits for the
+// WebSocket writer. So the watchdog does not count the time the peer's
+// sender is blocked handing a message to the writer (finding 32). Once the
+// writer takes messages again, a client that takes none is wedged as ever.
+func TestStallWatchdogDoesNotCountUplinkBackpressure(t *testing.T) {
+	inner := newFakePeer() // nobody receives what it is sent: the writer is busy
+	const stallAfter = 100 * time.Millisecond
+	stalls := make(chan time.Duration, 1)
+	p := newObservedPeer(inner, newSignal(), peerOptions{
+		stallAfter: stallAfter,
+		onStall:    func(d time.Duration) { stalls <- d },
+	})
+	defer p.Close()
+	p.Send() <- &nxwamp.Publish{Request: 1} // the sender takes it and waits for the writer
+	go func() { inner.recv <- &nxwamp.Event{} }()
+
+	select {
+	case <-stalls:
+		t.Fatal("stall reported while the uplink was backed up")
+	case <-time.After(3 * stallAfter):
+	}
+	if closed(p.Done()) {
+		t.Fatal("closed while the uplink was backed up")
+	}
+
+	<-inner.send // the writer takes the message: the uplink moves again
+	unblocked := time.Now()
+	recv(t, stalls, "the stall report once the writer is idle")
+	if el := time.Since(unblocked); el < stallAfter/2 {
+		t.Fatalf("stall reported %v after the uplink moved again, want about %v", el, stallAfter)
+	}
+	eventually(t, 5*time.Second, "the peer to close", func() bool { return closed(p.Done()) })
+}
+
+// With a real nexus client: its receive loop waits to send an ERROR behind a
+// backed-up uplink, so the next message waits in the forwarder — longer
+// than the watchdog's bound. Once the uplink moves, all of it is delivered
+// and the connection was never closed.
+func TestStallWatchdogSparesReceiveLoopWaitingOnUplink(t *testing.T) {
+	const stallAfter = 100 * time.Millisecond
+	stalls := make(chan time.Duration, 1)
+	s, routerSide, _ := scriptedSessionWith(t, peerOptions{
+		stallAfter: stallAfter,
+		onStall:    func(d time.Duration) { stalls <- d },
+		holdLimit:  5 * time.Second,
+	})
+	events := make(chan *nxwamp.Event, 1)
+	subscribed := make(chan error, 1)
+	go func() { subscribed <- s.subscribe("t", func(ev *nxwamp.Event) { events <- ev }, nil) }()
+	sub := expectSent[*nxwamp.Subscribe](t, routerSide)
+	routerSide.Send() <- &nxwamp.Subscribed{Request: sub.Request, Subscription: 70}
+	if err := recv(t, subscribed, "Subscribe"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The router stops reading. The transport takes one publication, the
+	// sender a second one and waits for the writer: the uplink is backed up.
+	for range 2 {
+		if err := s.cli.Publish("up", nil, nxwamp.List{"payload"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The receive loop answers an INVOCATION of a registration it does not
+	// know with an ERROR, which waits behind the publications; the EVENT
+	// behind it waits for the receive loop.
+	routerSide.Send() <- &nxwamp.Invocation{Request: 9, Registration: 999, Details: nxwamp.Dict{}}
+	routerSide.Send() <- &nxwamp.Event{Subscription: 70, Publication: 1, Details: nxwamp.Dict{}}
+	select {
+	case <-stalls:
+		t.Fatal("stall reported while the receive loop waited on the backed-up uplink")
+	case <-events:
+		t.Fatal("the scenario did not hold up the receive loop")
+	case <-time.After(3 * stallAfter):
+	}
+
+	// The uplink moves again.
+	expectSent[*nxwamp.Publish](t, routerSide)
+	expectSent[*nxwamp.Publish](t, routerSide)
+	if e := expectSent[*nxwamp.Error](t, routerSide); e.Type != nxwamp.INVOCATION || e.Request != 9 {
+		t.Fatalf("the client answered %v", e)
+	}
+	recv(t, events, "the event once the uplink moved")
+	noRecv(t, stalls, "a stall report")
+	if !s.alive() {
+		t.Fatal("the session is gone")
+	}
+}
+
 func TestObservedPeerCloseFiresDone(t *testing.T) {
 	inner := newFakePeer()
 	p := newObservedPeer(inner, newSignal(), peerOptions{})

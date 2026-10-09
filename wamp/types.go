@@ -26,13 +26,41 @@ type Event struct {
 
 // Row returns the first positional argument as a row map — the shape of a
 // table row delivered by SubscribeToTable. It returns nil when the event has
-// no positional arguments or the first one is not a map.
+// no positional arguments or the first one is not a map, as for an event of
+// a transform, which carries the whole view (see Rows).
 func (e *Event) Row() map[string]any {
 	if e == nil || len(e.Args) == 0 {
 		return nil
 	}
 	row, _ := e.Args[0].(map[string]any)
 	return row
+}
+
+// Rows returns the rows the event carries in its first positional argument:
+// a one-row slice when it is a row map (a table's realtime event, see Row),
+// and the rows themselves when it is a list of row maps — a transform's
+// realtime event, which carries a snapshot of the whole view, or a bulk of
+// rows. An empty list gives an empty, non-nil slice. Rows returns nil when
+// the event has no positional arguments or the first one is neither.
+func (e *Event) Rows() []map[string]any {
+	if e == nil || len(e.Args) == 0 {
+		return nil
+	}
+	switch v := e.Args[0].(type) {
+	case map[string]any:
+		return []map[string]any{v}
+	case []any:
+		rows := make([]map[string]any, len(v))
+		for i, el := range v {
+			row, ok := el.(map[string]any)
+			if !ok {
+				return nil
+			}
+			rows[i] = row
+		}
+		return rows
+	}
+	return nil
 }
 
 // EventHandler handles events of a subscription.
@@ -65,7 +93,9 @@ type Invocation struct {
 //
 // A returned *Error is sent with its URI, Args and Kwargs. Any other error
 // is sent as wamp.error.runtime_error with the error text as its argument.
-// ctx is cancelled when the caller cancels the call or the session ends.
+// Values are sent as given: see Connection.Register for what a caller can
+// receive. ctx is cancelled when the caller cancels the call or the session
+// ends.
 type InvocationHandler func(ctx context.Context, inv *Invocation) (any, error)
 
 // Result is the outcome of a remote procedure call.
@@ -139,9 +169,16 @@ const (
 )
 
 // IsFatalAuthReason reports whether reason, a WAMP close or abort reason,
-// means that the router rejected the credentials or role: URINotAuthorized,
+// means that the router refused the credentials or role: URINotAuthorized,
 // URIAuthorizationFailed, URIAuthenticationFailed or URINoAuthMethod.
-// Retrying cannot succeed until the credential or grant changes.
+//
+// Such a refusal is usually lasting: retrying succeeds only once the
+// credential or grant changes. But ironflock-router also refuses with
+// URIAuthenticationFailed ("invalid signature") while it cannot verify a
+// credential — its authenticator or database fails — and retrying succeeds
+// once that has passed; a revoked grant and such an outage look the same.
+// Config.FailOnAuthError therefore treats a refusal of a connection that
+// has been established as final only when it persists.
 func IsFatalAuthReason(reason string) bool {
 	switch reason {
 	case URINotAuthorized, URIAuthorizationFailed, URIAuthenticationFailed, URINoAuthMethod:
@@ -186,7 +223,26 @@ type CallOptions struct {
 	Timeout time.Duration
 	// DiscloseMe asks the router to disclose the caller to the callee.
 	DiscloseMe bool
-	// Extra holds additional WAMP CALL options, sent as-is.
+	// OnProgress, if set, receives the call's progressive results: the call
+	// asks for them (WAMP receive_progress), and every result the callee
+	// sends before its final one is passed to OnProgress, in order, one at a
+	// time, on a goroutine of its own — never on the connection's receive
+	// loop, so a slow OnProgress holds up neither the connection nor other
+	// calls, only the return of its own Call (the results it has not taken
+	// yet wait in memory). Call returns the final result
+	// only after OnProgress has returned for every progressive result, and
+	// OnProgress is never called once Call has returned. When the call fails
+	// instead (its ctx ends, the session is lost, the callee answers an
+	// error), the progressive results not yet passed on are dropped, and Call
+	// returns once an OnProgress call under way has returned. A panicking
+	// OnProgress is recovered and logged.
+	//
+	// Without OnProgress a callee's progressive result fails the call: it is
+	// not the result.
+	OnProgress func(res *Result)
+	// Extra holds additional WAMP CALL options, sent as-is. Progressive
+	// results are asked for with OnProgress: receive_progress here without
+	// OnProgress fails the call before it is sent.
 	Extra map[string]any
 }
 
