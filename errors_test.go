@@ -123,3 +123,46 @@ func TestUnknownFilterOperatorsAreLoggedNotRejected(t *testing.T) {
 		t.Errorf("filter %v", got)
 	}
 }
+
+// The data backend's typed refusals keep their URI through the operation
+// error, and are not retried. The constants are fleetdb v1.4.0's literals
+// (DataBackend.ts, storageGuard.ts).
+func TestDataBackendRefusals(t *testing.T) {
+	for got, want := range map[string]string{
+		URIRateLimited:                "sys.dataservice.error.rate_limited",
+		URIResultTooLarge:             "sys.dataservice.error.result_too_large",
+		URIInvalidLimit:               "sys.dataservice.error.invalid_limit",
+		URIInvalidTimeRange:           "sys.dataservice.error.invalid_time_range",
+		URIInvalidMetric:              "sys.dataservice.error.invalid_metric",
+		URIInvalidGroupBy:             "sys.dataservice.error.invalid_group_by",
+		URISeriesTooManyGroups:        "sys.dataservice.error.series_too_many_groups",
+		URISecretColumn:               "sys.dataservice.error.secret_column",
+		URINotASecretColumn:           "sys.dataservice.error.not_a_secret_column",
+		URIStorageFull:                "sys.dataservice.error.storage_full",
+		URIStorageOverusage:           "sys.dataservice.error.storage_overusage",
+		URIEntityKeyConflict:          "sys.dataservice.error.entity_key_conflict",
+		URISecretSentinelUnresolvable: "sys.dataservice.error.secret_sentinel_unresolvable",
+		URISecretCiphertextRejected:   "sys.dataservice.error.secret_ciphertext_rejected",
+	} {
+		if got != want {
+			t.Errorf("%s, want %s", got, want)
+		}
+	}
+
+	f := flock(t)
+	fail(f.own, wampErr(URIRateLimited, "secret.verify is limited to 120 calls per minute"))
+	_, err := f.VerifySecret(bg, "credentials", "api_key", "x", nil)
+	if WampURI(err) != URIRateLimited {
+		t.Errorf("VerifySecret: %v", err)
+	}
+	if want := `verifySecret('credentials') failed with WAMP error 'sys.dataservice.error.rate_limited' — ["secret.verify is limited to 120 calls per minute"]`; err.Error() != want {
+		t.Errorf("message %q", err)
+	}
+	fail(f.own, wampErr(URIStorageFull, "appliance storage full"))
+	calls := len(f.own.allCalls())
+	_, err = f.AppendToTable(bg, "sensordata", Row{"tsp": "2026-01-01T00:00:00Z"})
+	var werr *WampError
+	if !errors.As(err, &werr) || werr.URI != URIStorageFull || len(f.own.allCalls()) != calls+1 {
+		t.Errorf("AppendToTable: %v after %d calls", err, len(f.own.allCalls())-calls)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -703,5 +704,43 @@ func mustContain(t *testing.T, s string, parts ...string) {
 		if !strings.Contains(s, p) {
 			t.Errorf("%q does not contain %q", s, p)
 		}
+	}
+}
+
+// readCall returns call without its options, failing the test unless they
+// ask for progressive results and hold nothing else: the options of a read
+// the data backend may answer in chunks.
+func readCall(t *testing.T, call fakeCall) fakeCall {
+	t.Helper()
+	if call.Opts == nil || call.Opts.OnProgress == nil {
+		t.Errorf("%s does not ask for progressive results (options %#v)", call.Procedure, call.Opts)
+	} else {
+		rest := *call.Opts
+		rest.OnProgress = nil
+		if !reflect.DeepEqual(rest, wamp.CallOptions{}) {
+			t.Errorf("%s: options %#v besides OnProgress", call.Procedure, rest)
+		}
+	}
+	call.Opts = nil
+	return call
+}
+
+// answerProgressively makes c answer every call as fleetdb answers a large
+// read: a progressive result with each of progress as its Args, passed to the
+// call's OnProgress in order before the call returns (as wamp.Connection
+// does), then final. A call that does not ask for progressive results is
+// refused with result_too_large.
+func answerProgressively(c *fakeConn, progress [][]any, final any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.callFn = func(call fakeCall) (*wamp.Result, error) {
+		if call.Opts == nil || call.Opts.OnProgress == nil {
+			return nil, wampErr(URIResultTooLarge, "This query returned 9 MB (30 rows).",
+				map[string]any{"detail": "caller cannot receive progressive results"})
+		}
+		for _, args := range progress {
+			call.Opts.OnProgress(&wamp.Result{Args: args, Details: map[string]any{"progress": true}})
+		}
+		return resultOf(final), nil
 	}
 }

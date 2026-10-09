@@ -11,7 +11,8 @@
 //	if err != nil { log.Fatal(err) }
 //	err = ifl.Run(context.Background(), func(ctx context.Context) error {
 //		for {
-//			if err := ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5}); err != nil {
+//			row := ironflock.Row{"tsp": time.Now(), "temperature": 22.5}
+//			if err := ifl.PublishToTable(ctx, "sensordata", row); err != nil {
 //				log.Print(err)
 //			}
 //			select {
@@ -22,6 +23,10 @@
 //		}
 //	})
 //
+// Every table has a mandatory tsp column, the row's timestamp: a row the app
+// writes carries it (a time.Time is sent as RFC 3339 in UTC), unless the
+// table's data template reads tsp from another part of the message.
+//
 // The connection reconnects on its own and restores every subscription and
 // registered device function after a reconnect. Table operations ride out a
 // platform restart for up to the reconnect window (60s by default) before
@@ -29,6 +34,7 @@
 package ironflock
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +49,7 @@ import (
 	"time"
 
 	"github.com/RecordEvolution/ironflock-go/filestore"
+	"github.com/RecordEvolution/ironflock-go/internal/env"
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
@@ -108,8 +115,13 @@ type config struct {
 }
 
 // WithSerialNumber sets the device serial number (default: the
-// DEVICE_SERIAL_NUMBER environment variable). It can also be used to
-// authenticate as another device.
+// DEVICE_SERIAL_NUMBER environment variable), which publications and table
+// writes carry as DEVICE_SERIAL_NUMBER in their metadata. It does not change
+// the identity the connection authenticates with while the device agent
+// injects a per-app credential (APP_AUTH_ID/APP_AUTH_SECRET): the platform
+// identifies the device from that credential. The serial is the credential
+// only in the legacy (serial, serial) fallback, without an injected per-app
+// credential. To present another credential, use WithCredentials.
 func WithSerialNumber(serial string) Option { return func(c *config) { c.serialNumber = serial } }
 
 // WithDeviceName overrides the DEVICE_NAME environment variable.
@@ -240,9 +252,12 @@ type IronFlock struct {
 	// sessionWait is how long an operation without a window of its own
 	// waits for Start: the connection's default session wait.
 	sessionWait time.Duration
-	// afterOpenSettled, set by tests, is called once a successful
-	// consumed-app open has settled its outcome (see runOpen).
-	afterOpenSettled func()
+	// beforeOpenPublished and afterOpenPublished, set by tests, are called by
+	// a successful consumed-app open that found the instance not stopped,
+	// right before and right after it publishes its outcome, with f.mu held
+	// (see runOpen).
+	beforeOpenPublished func()
+	afterOpenPublished  func()
 }
 
 // New creates an IronFlock instance from the environment the device agent
@@ -389,8 +404,10 @@ func (f *IronFlock) AppKey() int { return f.appKey }
 // A file call waits up to 10s for the connection and is not retried: unlike
 // table operations, file calls do not use the reconnect window (see
 // WithReconnectWindow), so during a platform restart a call can fail with
-// filestore.CodeNotAvailable until the file service has registered again.
-// Stop closes the idle HTTP connections of the store's direct transfers.
+// filestore.CodeNotAvailable until the file service has registered again —
+// as it also does whenever it binds the data backend anew. Such a call ran
+// nowhere, so the app may repeat it. Stop closes the idle HTTP connections
+// of the store's direct transfers.
 func (f *IronFlock) Files() *filestore.FileStore {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -532,6 +549,14 @@ func (f *IronFlock) Start(ctx context.Context) error {
 	f.started = true
 	f.mu.Unlock()
 
+	if f.authID == "" {
+		// The connection reads the per-app credential from the device
+		// agent's mirror on every attempt (wamp.AppCredentials): say on the
+		// app's logger, once, when the mirror cannot be read.
+		_, idErr := env.Lookup("APP_AUTH_ID")
+		_, secretErr := env.Lookup("APP_AUTH_SECRET")
+		env.WarnUnreadable(f.log, cmp.Or(idErr, secretErr))
+	}
 	if err := f.conn.Start(ctx); err != nil {
 		// The connection makes no further attempt and may be started again.
 		f.mu.Lock()
@@ -551,9 +576,11 @@ func (f *IronFlock) routerURL() (string, error) {
 	return wamp.WebSocketURI(f.reswarmURL)
 }
 
-// runContextKey marks the context Run passes to main; its value is the
-// IronFlock running main.
-type runContextKey struct{}
+// runContextKey marks the context Run passes to main: the context of f's main
+// holds a value under runContextKey{f}. A key per instance keeps the mark of
+// every enclosing Run visible when Runs nest (another IronFlock's Run inside
+// main).
+type runContextKey struct{ f *IronFlock }
 
 // Stop closes every consumed-app connection and the connection itself, and
 // waits for that within ctx. It is idempotent: a later Stop waits for the
@@ -564,24 +591,21 @@ type runContextKey struct{}
 // wamp.ErrStopped), operations waiting for Start fail with wamp.ErrStopped,
 // and the context Run passes to main is cancelled, so Run returns once main
 // does. Stop does not wait for main, which may call Stop itself — even with
-// that context: Stop does not let it cut the shutdown short, but stops within
-// 10s, like the Stop Run performs after main (or by the context's deadline,
-// if that is sooner). Afterwards operations fail with an error wrapping
-// wamp.ErrStopped.
+// that context, or one derived from it (in another IronFlock's Run, say):
+// Stop does not let it cut the shutdown short, but stops within 10s, like the
+// Stop Run performs after main. Neither the deadline that context inherits
+// from Run's nor one main sets on it bounds the shutdown further. Afterwards
+// operations fail with an error wrapping wamp.ErrStopped.
 //
 // Stop also closes the idle HTTP connections of the store Files returns (see
 // filestore.FileStore.CloseIdleConnections): a direct transfer still in
 // progress is not interrupted, and its connection returns to the pool when
 // it ends.
 func (f *IronFlock) Stop(ctx context.Context) error {
-	if ctx.Value(runContextKey{}) == f {
+	if ctx.Value(runContextKey{f}) != nil {
 		// main's context, which this Stop cancels.
-		deadline := time.Now().Add(f.runStopTimeout)
-		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-			deadline = d
-		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), f.runStopTimeout)
 		defer cancel()
 	}
 
@@ -680,7 +704,7 @@ func (f *IronFlock) Run(ctx context.Context, main func(ctx context.Context) erro
 	// terminates the process while main winds down or Run stops.
 	unhookSignals := context.AfterFunc(runCtx, cancel)
 	defer unhookSignals()
-	runCtx = context.WithValue(runCtx, runContextKey{}, f)
+	runCtx = context.WithValue(runCtx, runContextKey{f}, true)
 
 	err := f.Start(runCtx)
 	if errors.Is(err, ErrAlreadyStarted) {

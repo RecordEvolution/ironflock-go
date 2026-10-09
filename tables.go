@@ -101,7 +101,15 @@ func (f *IronFlock) publishMessage(ctx context.Context, topic string, args []any
 // <SWARM_KEY>.<APP_KEY>.<table>. Fire-and-forget: the acknowledgement
 // confirms delivery to the router, not the database insert.
 //
-//	ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5})
+//	ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"tsp": time.Now(), "temperature": 22.5})
+//
+// The data backend reads the row from the first positional argument (unless
+// the table's data template maps its columns elsewhere), and every table
+// has a mandatory tsp column: a row without tsp is dropped, with nothing but
+// an entry in the app's error-logs table to show for it. A row the data
+// backend refuses for lack of storage is dropped without even that (the
+// error-logs table notes only when the appliance's disk runs full).
+// AppendToTable reports such refusals.
 func (f *IronFlock) PublishToTable(ctx context.Context, table string, args ...any) error {
 	t, err := validateTableName(table)
 	if err != nil {
@@ -116,6 +124,12 @@ func (f *IronFlock) PublishToTable(ctx context.Context, table string, args ...an
 // AppendToTable appends a row to a fleet table by calling its append
 // procedure append.<SWARM_KEY>.<APP_KEY>.<table>, and returns the insert
 // outcome.
+//
+// The row needs a tsp, as for PublishToTable: the data backend refuses a row
+// without one with wamp.error.runtime_error and no reason ([{}]), and the
+// error then says so. Typed refusals: URIStorageFull (temporary: append the
+// row later), URIStorageOverusage, URIEntityKeyConflict, and for secret
+// columns URISecretSentinelUnresolvable and URISecretCiphertextRejected.
 func (f *IronFlock) AppendToTable(ctx context.Context, table string, args ...any) (*Result, error) {
 	t, err := validateTableName(table)
 	if err != nil {
@@ -131,9 +145,36 @@ func (f *IronFlock) AppendToTable(ctx context.Context, table string, args ...any
 	topic := fmt.Sprintf("append.%d.%d.%s", f.swarmKey, f.appKey, t)
 	res, err := f.call(ctx, topic, pos, f.withDeviceMetadata(kw), callOpts, f.reconnectWindow)
 	if err != nil {
-		return nil, operationFailed(fmt.Sprintf("Append to table '%s'", t), err)
+		return nil, appendFailed(fmt.Sprintf("Append to table '%s'", t), err,
+			"the data backend refused the row without a reason — a missing tsp is the usual cause; see the error-logs table")
 	}
 	return res, nil
+}
+
+// appendFailed wraps the failure of an append, as operationFailed does. The
+// data backend refuses a row it cannot store because of the row itself — a
+// missing tsp, above all — with a plain JavaScript Error, which reaches the
+// caller as wamp.error.runtime_error without a reason (args [{}]); such a
+// refusal gets note, which says what to check.
+func appendFailed(op string, err error, note string) error {
+	var werr *wamp.Error
+	if errors.As(err, &werr) && werr.URI == wamp.URIRuntimeError && len(werr.Kwargs) == 0 && noReason(werr.Args) {
+		return &OperationError{Op: op, Err: err, note: note}
+	}
+	return operationFailed(op, err)
+}
+
+// noReason reports whether args, the payload of an error, says nothing: no
+// arguments, or one empty object (what JSON.stringify makes of an Error).
+func noReason(args []any) bool {
+	switch len(args) {
+	case 0:
+		return true
+	case 1:
+		m, ok := args[0].(map[string]any)
+		return ok && len(m) == 0
+	}
+	return false
 }
 
 // bulkParams validates the parameters shared by the bulk operations.
@@ -157,6 +198,12 @@ func bulkParams(table string, rows any, kwargs []Kwargs) (string, []any, map[str
 // to bulk.<SWARM_KEY>.<APP_KEY>.<table>; the platform inserts the batch
 // atomically. rows is a non-empty slice of rows (Row / map[string]any, or
 // structs encoded via their json tags). kwargs are shared by the batch.
+// Every row needs its own tsp (see PublishToTable): a batch the data backend
+// refuses is dropped without a word to the publisher.
+//
+// Each row is encoded exactly as PublishToTable encodes it: taken as a value,
+// so MarshalJSON and MarshalText methods with pointer receivers are not used;
+// pass a []*T to use them.
 func (f *IronFlock) PublishRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) error {
 	t, batch, kw, err := bulkParams(table, rows, kwargs)
 	if err != nil {
@@ -174,7 +221,8 @@ func (f *IronFlock) PublishRowsToTable(ctx context.Context, table string, rows a
 // AppendRowsToTable appends many rows in a single call (bulk insert) to
 // appendBulk.<SWARM_KEY>.<APP_KEY>.<table> and returns the outcome (e.g.
 // {"success": true, "count": N}). All-or-nothing: if any row is invalid,
-// nothing is persisted.
+// nothing is persisted. Every row needs its own tsp; the refusals are those
+// of AppendToTable. Rows are encoded as PublishRowsToTable encodes them.
 func (f *IronFlock) AppendRowsToTable(ctx context.Context, table string, rows any, kwargs ...Kwargs) (*Result, error) {
 	t, batch, kw, err := bulkParams(table, rows, kwargs)
 	if err != nil {
@@ -186,7 +234,8 @@ func (f *IronFlock) AppendRowsToTable(ctx context.Context, table string, rows an
 	topic := fmt.Sprintf("appendBulk.%d.%d.%s", f.swarmKey, f.appKey, t)
 	res, err := f.call(ctx, topic, []any{batch}, f.withDeviceMetadata(kw), nil, f.reconnectWindow)
 	if err != nil {
-		return nil, operationFailed(fmt.Sprintf("Bulk append of %d row(s) to table '%s'", len(batch), t), err)
+		return nil, appendFailed(fmt.Sprintf("Bulk append of %d row(s) to table '%s'", len(batch), t), err,
+			"the data backend refused the rows without a reason — a row without tsp is the usual cause; see the error-logs table")
 	}
 	return res, nil
 }
@@ -311,6 +360,11 @@ func (t *TableSubscription) Unsubscribe(ctx context.Context) error {
 // transformed.bulk.<table>. Each event carries one row as stored — typed to
 // the data-template columns, secret columns masked — in Args[0] (see
 // Event.Row); rows of a bulk insert are delivered one event per row.
+//
+// A transform (a data template's SQL view) has no rows of its own: on every
+// tick of its schedule the data backend publishes the whole view — at most
+// 3000 rows, in the view's order reversed — as one event whose Args[0] is
+// the list of rows. Read it with Event.Rows; Event.Row returns nil for it.
 //
 // handler is called one event at a time, in the order the events arrive on
 // both feeds, as one subscription calls its handler (see EventHandler): it

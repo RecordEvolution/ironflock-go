@@ -1,7 +1,11 @@
 package ironflock
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -234,6 +238,14 @@ var (
 		{"-271821-04-20T00:00:00Z", -8640000000000000},
 		{"-271821-04-19T24:00:00", -8640000000000000},
 		{"-271821-04-19T24:00:00Z", -8640000000000000},
+		// Years 0-99 with T; a space from the year 100 on, and in negative
+		// years.
+		{"0099-03-30T23:59:00Z", -59035305660000},
+		{"0001-01-01T00:00:00", -62135596800000},
+		{"0100-01-01 00:00", -59011459200000},
+		{"0100-01-01 00:00Z", -59011459200000},
+		{"+000100-01-01 00:00Z", -59011459200000},
+		{"-000001-06-15 12:00", -62184456000000},
 	}
 
 	// rejectedISOTimes are strings the data backend cannot read (new Date
@@ -283,6 +295,12 @@ var (
 		"+275760-09-13T00:00:00.001Z", "+275760-09-13T00:00:00-00:01", "+275760-09-14",
 		"+275760-09-12T24:00:00.5Z", "-271821-04-19T23:59:59.999Z", "-271821-04-20T00:00:00+00:01",
 		"-271821-04-19",
+		// A space between date and time sends Date to its legacy parser,
+		// which reads the years 0-99 as 1950-2049 (13-31: not at all): a zero
+		// time.Time formatted with time.DateTime would read as 2001.
+		"0001-01-01 00:00:00", "0000-06-15 12:00Z", "0001-10-28 12:00:30.123+14:00", "0012-12-31 00:00",
+		"0020-01-01 00:00", "0050-06-01 00:00", "0099-03-30 23:59:00Z", "+000000-01-01 00:00",
+		"+000001-06-15 12:00", "+000099-12-31 23:59Z",
 	}
 )
 
@@ -401,38 +419,144 @@ func TestTimeRangeTimeBoundsTheDataBackendReads(t *testing.T) {
 	}
 }
 
+// GetSeriesHistory sends fleetdb's series contract (SeriesQueryArgs since
+// v1.0.58): the metrics as {ref, method} pairs, no top-level method, the
+// bucket width in whole milliseconds; filter groups are allowed.
 func TestSeriesWire(t *testing.T) {
 	got, err := seriesWire(&SeriesQueryParams{
-		Metrics:   []string{"temperature"},
-		Method:    MethodAvg,
+		Metrics: []SeriesMetric{
+			{Ref: "temperature", Method: MethodAvg}, {Ref: "temperature", Method: MethodMax},
+			{Ref: "json_data.a.b", Method: MethodSum}, {Ref: "tsp", Method: MethodCount},
+		},
+		Bucket:    time.Hour,
 		Limit:     500,
 		TimeRange: &TimeRange{Start: "2026-01-01T00:00:00Z", End: "2026-03-01T00:00:00Z"},
-		GroupBy:   []string{"device_id"},
+		GroupBy:   []string{"device_key"},
+		FilterAnd: []Filter{Or(Where("device_key", "=", 1), Where("device_key", "=", 2)), Where("temperature", "is not null", nil)},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"metrics":   []any{"temperature"},
-		"method":    "AVG",
+		"metrics": []any{
+			map[string]any{"ref": "temperature", "method": "AVG"},
+			map[string]any{"ref": "temperature", "method": "MAX"},
+			map[string]any{"ref": "json_data.a.b", "method": "SUM"},
+			map[string]any{"ref": "tsp", "method": "COUNT"},
+		},
+		"bucketMs":  int64(3_600_000),
 		"limit":     int64(500),
 		"timeRange": []any{"2026-01-01T00:00:00Z", "2026-03-01T00:00:00Z"},
-		"groupBy":   []any{"device_id"},
+		"groupBy":   []any{"device_key"},
+		"filterAnd": []any{
+			map[string]any{"combinator": "OR", "filters": []any{
+				map[string]any{"column": "device_key", "operator": "=", "value": int64(1)},
+				map[string]any{"column": "device_key", "operator": "=", "value": int64(2)},
+			}},
+			map[string]any{"column": "temperature", "operator": "IS NOT NULL"},
+		},
 	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %#v\nwant %#v", got, want)
+	}
+
+	// The minimal query: an automatic bucket, an open end; optional parts are
+	// left out.
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	got, err = seriesWire(&SeriesQueryParams{Metrics: []SeriesMetric{{"tsp", MethodCount}}, Limit: 1, TimeRange: Since(start)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]any{
+		"metrics":   []any{map[string]any{"ref": "tsp", "method": "COUNT"}},
+		"limit":     int64(1),
+		"timeRange": []any{"2026-01-01T00:00:00Z", nil},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("minimal: got %#v", got)
+	}
+	// A metric's column name may take up to 63 bytes, a bucket a whole
+	// number of milliseconds.
+	if _, err := seriesWire(&SeriesQueryParams{Metrics: []SeriesMetric{{strings.Repeat("x", 59), MethodAvg}}, Limit: 1,
+		Bucket: 1500 * time.Millisecond, TimeRange: &TimeRange{Start: int64(0)}}, nil); err != nil {
+		t.Errorf("63 bytes: %v", err)
+	}
+
+	end := start.Add(time.Hour)
+	ok := SeriesQueryParams{Metrics: []SeriesMetric{{Ref: "a", Method: MethodAvg}}, Limit: 1, TimeRange: &TimeRange{Start: int64(0)}}
+	bad := map[string]func(*SeriesQueryParams){
+		"no metrics":        func(p *SeriesQueryParams) { p.Metrics = nil },
+		"empty metrics":     func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{} },
+		"blank ref":         func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{{" ", MethodAvg}} },
+		"unknown method":    func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{{"a", "MEDIAN"}} },
+		"lower-case method": func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{{"a", "avg"}} },
+		"no method":         func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{{"a", MethodAvg}, {Ref: "b"}} },
+		"64-byte column":    func(p *SeriesQueryParams) { p.Metrics = []SeriesMetric{{strings.Repeat("x", 60), MethodAvg}} },
+		"limit 0":           func(p *SeriesQueryParams) { p.Limit = 0 },
+		"limit 10001":       func(p *SeriesQueryParams) { p.Limit = 10001 },
+		"no time range":     func(p *SeriesQueryParams) { p.TimeRange = nil },
+		"no start":          func(p *SeriesQueryParams) { p.TimeRange = &TimeRange{End: int64(5)} },
+		"nil time start":    func(p *SeriesQueryParams) { p.TimeRange = &TimeRange{Start: (*time.Time)(nil), End: end} },
+		"end before start":  func(p *SeriesQueryParams) { p.TimeRange = Between(end, start) },
+		"end at start":      func(p *SeriesQueryParams) { p.TimeRange = &TimeRange{Start: int64(5), End: 5.0} },
+		"end in the same ms": func(p *SeriesQueryParams) {
+			p.TimeRange = &TimeRange{Start: "2026-01-01T00:00:00.0001Z", End: "2026-01-01T00:00:00.0009Z"}
+		},
+		"mixed time range":  func(p *SeriesQueryParams) { p.TimeRange = &TimeRange{Start: "2026-01-01T00:00:00Z", End: int64(1)} },
+		"NaN start":         func(p *SeriesQueryParams) { p.TimeRange = &TimeRange{Start: math.NaN()} },
+		"bucket under 1s":   func(p *SeriesQueryParams) { p.Bucket = 999 * time.Millisecond },
+		"negative bucket":   func(p *SeriesQueryParams) { p.Bucket = -time.Second },
+		"sub-ms bucket":     func(p *SeriesQueryParams) { p.Bucket = time.Second + 500*time.Microsecond },
+		"latest":            func(p *SeriesQueryParams) { p.FilterAnd = []Filter{Latest()} },
+		"latest in a group": func(p *SeriesQueryParams) { p.FilterAnd = []Filter{Or(Where("a", "=", 1), Latest())} },
+		"latest_flag":       func(p *SeriesQueryParams) { p.FilterAnd = []Filter{Or(Where("latest_flag", "=", true))} },
+		"empty group":       func(p *SeriesQueryParams) { p.FilterAnd = []Filter{And()} },
+	}
+	for name, mutate := range bad {
+		p := ok
+		mutate(&p)
+		if _, err := seriesWire(&p, nil); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%s: want ErrInvalidArgument, got %v", name, err)
+		}
+	}
+	if _, err := seriesWire(&ok, nil); err != nil {
+		t.Fatalf("the base query: %v", err)
+	}
+}
+
+// SeriesMetric.Column names a metric's column in the result rows.
+func TestSeriesMetricColumn(t *testing.T) {
+	if c := (SeriesMetric{Ref: "temperature", Method: MethodAvg}).Column(); c != "AVG:temperature" {
+		t.Errorf("Column() = %q", c)
+	}
+	if c := (SeriesMetric{Ref: "json_data['k']", Method: MethodLast}).Column(); c != "LAST:json_data['k']" {
+		t.Errorf("Column() = %q", c)
+	}
+}
+
+// ColumnPaths are sent as columnPaths; without them the key is left out.
+func TestQueryWireColumnPaths(t *testing.T) {
+	q := &TableQueryParams{Limit: 5, Columns: []string{"json_data"}, ColumnPaths: []string{"json_data.a.b", "json_data['k.x']"}}
+	got, err := queryWire(q, MaxQueryLimit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"limit": int64(5), "offset": int64(0), "columns": []any{"json_data"},
+		"columnPaths": []any{"json_data.a.b", "json_data['k.x']"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v", got)
 	}
-	bad := []SeriesQueryParams{
-		{Metrics: []string{"a"}, Method: "MEDIAN", Limit: 1, TimeRange: &TimeRange{}},
-		{Metrics: []string{"a"}, Method: MethodAvg, Limit: 1},
-		{Metrics: []string{"a"}, Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}, FilterAnd: []Filter{Latest()}},
-		{Metrics: []string{"a"}, Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}, FilterAnd: []Filter{Where("latest_flag", "=", true)}},
-		{Metrics: []string{"a"}, Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}, FilterAnd: []Filter{Or(IsNull("a"))}},
+	got, err = queryWire(&TableQueryParams{Limit: 5, Columns: []string{"json_data"}}, MaxSecretLimit, nil)
+	if _, sent := got["columnPaths"]; err != nil || sent {
+		t.Errorf("without paths: %#v, %v", got, err)
 	}
-	for i, p := range bad {
-		if _, err := seriesWire(&p, nil); !errors.Is(err, ErrInvalidArgument) {
-			t.Errorf("case %d: want ErrInvalidArgument, got %v", i, err)
-		}
+	if got, err := queryWire(&TableQueryParams{Limit: 5, ColumnPaths: []string{}}, MaxQueryLimit, nil); err != nil ||
+		!reflect.DeepEqual(got["columnPaths"], []any{}) {
+		t.Errorf("empty paths: %#v, %v", got, err)
+	}
+	if _, err := queryWire(&TableQueryParams{Limit: 5, ColumnPaths: []string{"json_data.a", " "}}, MaxQueryLimit, nil); !errors.Is(err, ErrInvalidArgument) ||
+		!strings.Contains(err.Error(), "columnPaths[1] must be a non-empty string") {
+		t.Errorf("blank path: %v", err)
 	}
 }
 
@@ -581,5 +705,200 @@ func TestSQLOperatorsIsACopy(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "is not in standard list"); n != 1 {
 		t.Fatalf("%d operator warnings, want 1 (for REGEXP):\n%s", n, logs)
+	}
+}
+
+// Known operators go on the wire in their canonical form, whatever their
+// case and surrounding spaces: fleetdb matches an operator exactly (a typia
+// literal union), so "like" would fail the whole read. An unknown operator is
+// sent as given, with a warning.
+func TestFilterOperatorsAreSentCanonical(t *testing.T) {
+	cases := []struct {
+		op, want string
+		value    any
+		wire     any // nil: no value key
+	}{
+		{"like", "LIKE", "%a%", "%a%"},
+		{"ilike", "ILIKE", "%a%", "%a%"},
+		{"not ilike", "NOT ILIKE", "%a%", "%a%"},
+		{"LIKE ", "LIKE", "%a%", "%a%"},
+		{" in ", "IN", []int{1, 2}, []any{int64(1), int64(2)}},
+		{"Not In", "NOT IN", []string{"a"}, []any{"a"}},
+		{"is null", "IS NULL", nil, nil},
+		{"is not null", "IS NOT NULL", nil, nil},
+		{" = ", "=", 1, int64(1)},
+		{"<> ", "<>", 1, int64(1)},
+	}
+	for _, c := range cases {
+		log, logs := newTestLogger()
+		f := Where("a", c.op, c.value)
+		got, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{f, Or(f)}}, MaxQueryLimit, log)
+		if err != nil {
+			t.Errorf("%q: %v", c.op, err)
+			continue
+		}
+		want := map[string]any{"column": "a", "operator": c.want}
+		if c.wire != nil {
+			want["value"] = c.wire
+		}
+		wantFilters := []any{want, map[string]any{"combinator": "OR", "filters": []any{want}}}
+		if !reflect.DeepEqual(got["filterAnd"], wantFilters) {
+			t.Errorf("%q sent as %#v\nwant %#v", c.op, got["filterAnd"], wantFilters)
+		}
+		if logs.String() != "" {
+			t.Errorf("%q logged %s", c.op, logs)
+		}
+	}
+
+	log, logs := newTestLogger()
+	got, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{Where("a", "regexp", "x")}}, MaxQueryLimit, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op := got["filterAnd"].([]any)[0].(map[string]any)["operator"]; op != "regexp" {
+		t.Errorf("an unknown operator was sent as %q", op)
+	}
+	if n := strings.Count(logs.String(), "is not in standard list"); n != 1 {
+		t.Errorf("%d warnings, want 1:\n%s", n, logs)
+	}
+}
+
+// IN and NOT IN take a set. A nil slice — what collecting nothing into a
+// var []T gives — is the empty set, as an empty one is (fleetdb: IN matches
+// no row, NOT IN every row); and set elements may be booleans.
+func TestFilterSetsTakeNilSlicesAndBooleans(t *testing.T) {
+	var ids []string
+	cases := []struct {
+		f    Filter
+		want any
+	}{
+		{Where("id", "IN", ids), []any{}},
+		{Where("id", "NOT IN", []any(nil)), []any{}},
+		{Where("id", "in", []int(nil)), []any{}},
+		{Where("id", "IN", []string{}), []any{}},
+		{Where("id", "IN", [0]string{}), []any{}},
+		{Where("active", "IN", []bool{true, false}), []any{true, false}},
+		{Where("x", "NOT IN", []any{"a", int64(1), 2.5, true}), []any{"a", int64(1), 2.5, true}},
+	}
+	for _, c := range cases {
+		got, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{c.f, Or(c.f)}}, MaxQueryLimit, nil)
+		if err != nil {
+			t.Errorf("%#v: %v", c.f, err)
+			continue
+		}
+		filters := got["filterAnd"].([]any)
+		inGroup := filters[1].(map[string]any)["filters"].([]any)[0]
+		for _, w := range []any{filters[0], inGroup} {
+			if v := w.(map[string]any)["value"]; !reflect.DeepEqual(v, c.want) {
+				t.Errorf("%#v: value %#v, want %#v", c.f, v, c.want)
+			}
+		}
+	}
+	for _, f := range []Filter{
+		Where("id", "IN", []any{nil}),
+		Where("id", "IN", []*string{nil}),
+		Where("id", "IN", []any{[]any{1}}),
+		Where("id", "IN", []map[string]any{{}}),
+		Where("id", "IN", 3),
+		Where("id", "IN", true),
+		Where("id", "=", []string(nil)),
+		Where("id", "=", (*int)(nil)),
+	} {
+		if _, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{f}}, MaxQueryLimit, nil); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%#v: %v, want ErrInvalidArgument", f, err)
+		}
+	}
+	_, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{Where("id", "=", (*int)(nil))}}, MaxQueryLimit, nil)
+	if err == nil || !strings.Contains(err.Error(), `predicate on column "id" needs a value`) {
+		t.Errorf("a nil pointer: %v", err)
+	}
+}
+
+// queryUUID has the shape of github.com/google/uuid.UUID: an array encoded
+// through a value-receiver MarshalText.
+type queryUUID [16]byte
+
+func (u queryUUID) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:])), nil
+}
+
+// queryTag is a named string type.
+type queryTag string
+
+// listMarshaler encodes as a JSON array.
+type listMarshaler struct{}
+
+func (listMarshaler) MarshalJSON() ([]byte, error) { return []byte("[1,2]"), nil }
+
+// A filter value is converted like any payload value before its shape is
+// checked: a type that encodes as a string (uuid.UUID, net.IP,
+// json.RawMessage) is a scalar, whatever its Go kind, and a value that
+// encodes as a JSON array is a list, which only IN and NOT IN take.
+func TestFilterValuesAreConvertedBeforeTheirShapeIsChecked(t *testing.T) {
+	id := queryUUID{1, 2, 3}
+	const idText = "01020300-0000-0000-0000-000000000000"
+	accepted := []struct {
+		f    Filter
+		want any
+	}{
+		{Where("id", "=", id), idText},
+		{Where("id", "!=", id), idText},
+		{Where("id", "LIKE", id), idText},
+		{Where("id", "IN", []queryUUID{id, {}}), []any{idText, "00000000-0000-0000-0000-000000000000"}},
+		{Where("ip", "=", net.ParseIP("10.0.0.1")), "10.0.0.1"},
+		{Where("x", "=", json.RawMessage(`"x"`)), "x"},
+		{Where("n", ">", json.RawMessage(`5`)), int64(5)},
+		{Where("tag", "IN", queryTag("a,b")), "a,b"},
+		{Where("ids", "IN", &[]string{"a", "b"}), []any{"a", "b"}},
+	}
+	for _, c := range accepted {
+		got, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{c.f, Or(c.f)}}, MaxQueryLimit, nil)
+		if err != nil {
+			t.Errorf("%#v: %v", c.f.Value, err)
+			continue
+		}
+		filters := got["filterAnd"].([]any)
+		inGroup := filters[1].(map[string]any)["filters"].([]any)[0]
+		for _, w := range []any{filters[0], inGroup} {
+			if v := w.(map[string]any)["value"]; !reflect.DeepEqual(v, c.want) {
+				t.Errorf("%#v: value %#v, want %#v", c.f.Value, v, c.want)
+			}
+		}
+	}
+	for _, f := range []Filter{
+		Where("ids", "=", &[]string{"a"}),
+		Where("x", "=", listMarshaler{}),
+		Where("x", "=", json.RawMessage(`[1,2]`)),
+		Where("x", "=", []byte("ab")),
+		Where("x", "IN", []byte("ab")),
+	} {
+		if _, err := queryWire(&TableQueryParams{Limit: 1, FilterAnd: []Filter{f}}, MaxQueryLimit, nil); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("%#v: %v, want ErrInvalidArgument", f.Value, err)
+		}
+	}
+}
+
+// A NaN or infinite epoch-ms bound cannot be sent: on its way to the data
+// backend it becomes null, an open bound, which would drop the time filter
+// silently.
+func TestTimeRangeRejectsNonFiniteBounds(t *testing.T) {
+	for _, tr := range []TimeRange{
+		{Start: math.NaN()}, {Start: math.Inf(1)}, {End: math.Inf(-1)}, {Start: math.Inf(-1)},
+		{Start: float32(math.NaN())}, {End: float32(math.Inf(1))}, {Start: math.NaN(), End: 1.7e12},
+	} {
+		if _, err := timeRangeWire(&tr); !errors.Is(err, ErrInvalidArgument) ||
+			!strings.Contains(err.Error(), "finite epoch-ms numbers") {
+			t.Errorf("%v: %v", tr, err)
+		}
+		for _, limit := range []int{MaxQueryLimit, MaxSecretLimit} {
+			if _, err := queryWire(&TableQueryParams{Limit: 1, TimeRange: &tr}, limit, nil); !errors.Is(err, ErrInvalidArgument) {
+				t.Errorf("queryWire %v: %v", tr, err)
+			}
+		}
+	}
+	for _, tr := range []TimeRange{{Start: 1.7e12, End: 1.8e12}, {Start: 0.5}, {Start: float32(0)}, {Start: -1.0}, {Start: int64(0)}} {
+		if _, err := timeRangeWire(&tr); err != nil {
+			t.Errorf("%v: %v", tr, err)
+		}
 	}
 }

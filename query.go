@@ -21,6 +21,10 @@ const (
 	MaxQueryLimit  = 10000
 	MaxSecretLimit = 100
 	maxUint32      = math.MaxUint32
+	// maxSeriesColumn is the longest name of a series result column, in
+	// bytes: Postgres truncates longer identifiers, so the data backend
+	// refuses them.
+	maxSeriesColumn = 63
 )
 
 // sqlOperators is the vocabulary SQLOperators returns.
@@ -30,16 +34,22 @@ var sqlOperators = []string{
 	"IN", "NOT IN", "IS NULL", "IS NOT NULL",
 }
 
-// SQLOperators returns the data backend's filter operator vocabulary. An
-// operator outside it is logged as a warning, not rejected: the server is
-// the authority and may accept operators this release predates. The slice
-// is a copy; changing it does not change the SDK's check.
+// SQLOperators returns the data backend's filter operator vocabulary. A
+// filter's operator is matched against it in any case, surrounding spaces
+// ignored, and a known operator is sent in the form listed here: the data
+// backend accepts exactly these strings. An operator outside it is sent as
+// given and logged as a warning, not rejected: the server is the authority
+// and may accept operators this release predates. The slice is a copy;
+// changing it does not change the SDK's check.
 func SQLOperators() []string { return slices.Clone(sqlOperators) }
 
 // DownSampleMethod is the aggregation a series query applies per time bucket.
 type DownSampleMethod string
 
-// Down-sampling methods.
+// Down-sampling methods. AVG and SUM take numeric and bigint columns, MIN and
+// MAX string and timestamp columns too (a JSON path is read as a number by
+// all four); FIRST and LAST take the value of the bucket's earliest and
+// latest row; COUNT counts the values that are not null — of tsp, the rows.
 const (
 	MethodAvg   DownSampleMethod = "AVG"
 	MethodSum   DownSampleMethod = "SUM"
@@ -54,9 +64,16 @@ var downSampleMethods = []DownSampleMethod{
 	MethodAvg, MethodSum, MethodCount, MethodMin, MethodMax, MethodFirst, MethodLast,
 }
 
-// TimeRange is the [start, end] range of a query. Each bound is a date-time
-// string, a time.Time, an epoch-milliseconds number, or nil for an open end.
-// Strings and times cannot be mixed with numbers in one range.
+// TimeRange selects the rows whose tsp lies in the half-open range
+// [Start, End): from Start, inclusive, up to End, exclusive. Each bound is a
+// date-time string, a time.Time, an epoch-milliseconds number, or nil for an
+// open end. Strings and times cannot be mixed with numbers in one range.
+//
+// The data backend currently reads both bounds of table and secret reads
+// (GetHistory, RevealSecrets, VerifySecret) truncated to the whole second (it
+// divides their epoch milliseconds as integers), and ignores a bound of
+// exactly 1970-01-01T00:00:00Z; series reads (GetSeriesHistory) use the
+// bounds to the millisecond. A read of a transform ignores TimeRange.
 //
 // A string is sent exactly as given. The data backend reads it with
 // JavaScript's Date, so it must be an ISO 8601 date or date-time in extended
@@ -68,32 +85,45 @@ var downSampleMethods = []DownSampleMethod{
 // 0000-9999 take six digits and a sign (+010000). Strings Date would read as
 // another time or not at all are rejected with ErrInvalidArgument, among them
 // basic format (20260701T123000Z), hours without minutes, offsets of hours
-// only and days a month does not have (2026-02-30). Fractions of a
-// millisecond are dropped.
+// only, days a month does not have (2026-02-30), and a space between date and
+// time in the years 0-99 (Date reads "0001-01-01 00:00:00" as 2001; use T
+// there). Fractions of a millisecond are dropped.
 //
 // A time.Time is sent as RFC 3339 in UTC, with the six-digit year outside
 // 0000-9999 (as JavaScript's Date.toISOString writes it); one outside the
 // range of Date (-271821-04-20 to +275760-09-13) is rejected.
+//
+// A number is the time in milliseconds since the epoch. NaN and ±Inf are
+// rejected with ErrInvalidArgument: they would reach the data backend as an
+// open bound.
 type TimeRange struct {
 	Start any
 	End   any
 }
 
-// Between returns the closed range [start, end].
+// Between returns the half-open range [start, end): the rows with
+// start <= tsp < end.
 func Between(start, end time.Time) *TimeRange { return &TimeRange{Start: start, End: end} }
 
-// Since returns the range from start with an open end.
+// Since returns the range from start, inclusive, with an open end.
 func Since(start time.Time) *TimeRange { return &TimeRange{Start: start} }
 
-// Until returns the range with an open start, ending at end.
+// Until returns the range with an open start, ending before end.
 func Until(end time.Time) *TimeRange { return &TimeRange{End: end} }
 
 // Filter is one entry of a query's FilterAnd list: a WHERE predicate, the
 // latest-row marker, or a group of filters combined with AND or OR. Build
 // filters with Where, IsNull, IsNotNull, Latest, And and Or.
 type Filter struct {
-	// Predicate: Column Operator Value. Value is omitted by IS NULL and
-	// IS NOT NULL; IN and NOT IN take a slice (or a comma-joined string).
+	// Predicate: Column Operator Value. Operator is matched against
+	// SQLOperators in any case (see there). Value is converted like any
+	// payload value (see Kwargs), and what it converts to must fit the
+	// operator: a string, number or bool for a comparison — a type that
+	// encodes as a string, such as uuid.UUID, net.IP or a json.RawMessage
+	// holding a string, is one — and a list of strings, numbers and bools
+	// for IN and NOT IN, which also take a comma-joined string. A nil or
+	// empty slice is the empty set: IN matches no row, NOT IN every row. IS
+	// NULL and IS NOT NULL take no Value.
 	Column   string
 	Operator string
 	Value    any
@@ -101,7 +131,9 @@ type Filter struct {
 	// Latest marks the entry as the latest-per-entity mode switch instead of
 	// a predicate: the data backend returns only the latest row per entity
 	// (the table's maintainLatestFlagFor key; the single most recent row
-	// without one). Other entries then narrow or filter those rows.
+	// without one). Other entries then narrow or filter those rows. It
+	// applies to table reads only: series queries refuse it, and reads of a
+	// transform ignore it.
 	Latest bool
 
 	// Combinator ("AND" or "OR") makes the entry a group of Filters. A data
@@ -134,36 +166,80 @@ func And(filters ...Filter) Filter { return Filter{Combinator: "AND", Filters: f
 // TableQueryParams selects rows of a table or transform. A nil
 // *TableQueryParams means the method's default ({Limit: 10}, or {Limit: 1}
 // for VerifySecret).
+//
+// A table read returns the newest rows that match, in ascending tsp order. A
+// transform (a data template's SQL view) applies Limit — at most 3000, more
+// is refused with URIInvalidLimit — Offset and FilterAnd only: it ignores
+// TimeRange, Columns, ColumnPaths and the Latest marker, and it drops a
+// filter on a column the transform does not declare (it has no implicit
+// tsp, device_key or authid), which widens the result. Its rows come in the
+// view's own order, reversed: the newest rows, oldest first, only when the
+// view orders newest first. Bound a transform's time range in its SQL.
 type TableQueryParams struct {
-	// Limit is the maximum number of rows: 1-10000 (1-100 for the secret
-	// procedures, which reject a larger value instead of clamping it).
+	// Limit is the maximum number of rows: 1-10000 (1-3000 for a transform;
+	// 1-100 for the secret procedures, which reject a larger value instead
+	// of clamping it).
 	Limit int
 	// Offset skips rows for pagination.
 	Offset int
-	// TimeRange restricts the rows' tsp; nil for all time.
+	// TimeRange restricts the rows' tsp to [Start, End) (see TimeRange); nil
+	// for all time.
 	TimeRange *TimeRange
 	// FilterAnd entries are AND-ed.
 	FilterAnd []Filter
 	// Columns to return (tsp, device_key and authid are always included);
 	// nil for all columns.
 	Columns []string
+	// ColumnPaths prunes json columns: JSON paths in the notation filters
+	// use ("json_data.a.b", "json_data['key']"). A json column listed in
+	// Columns comes back holding only the union of its paths, nested as in
+	// the column (a key it lacks as null); one with no path here, or named
+	// bare, comes back whole. Paths of other columns — not json, secret, or
+	// not in Columns — are ignored, as are all paths by reads of a transform
+	// and by data backends older than fleetdb v1.0.52. nil sends none.
+	ColumnPaths []string
 }
 
-// SeriesQueryParams queries down-sampled time series: numeric columns
-// aggregated into time buckets.
-type SeriesQueryParams struct {
-	// Metrics are the numeric columns to down-sample.
-	Metrics []string
-	// Method is the aggregation per bucket.
+// SeriesMetric is one aggregate of a series query: the column Ref — or a
+// JSON path into a json column, in the notation filters use
+// ("json_data.temp") — aggregated with Method in every time bucket.
+type SeriesMetric struct {
+	Ref    string
 	Method DownSampleMethod
-	// Limit is the maximum number of buckets: 1-10000.
+}
+
+// Column returns the name of the metric's column in the rows
+// GetSeriesHistory returns: "<METHOD>:<ref>", e.g. "AVG:temperature".
+func (m SeriesMetric) Column() string { return string(m.Method) + ":" + m.Ref }
+
+// SeriesQueryParams queries a table's history down-sampled into time
+// buckets (see GetSeriesHistory for the rows it returns).
+type SeriesQueryParams struct {
+	// Metrics are the aggregates computed per bucket: at least one. Each is
+	// returned under SeriesMetric.Column, which must fit 63 bytes; the same
+	// pair twice is computed once.
+	Metrics []SeriesMetric
+	// Bucket is the width of the time buckets: 0 divides the time range
+	// into Limit buckets; otherwise at least 1s, in whole milliseconds. When
+	// the range holds more than Limit buckets of that width, the data backend
+	// widens it to a multiple of itself. An open end reaches up to the data
+	// backend's now, a little after the caller's: Since(now.Add(-24 *
+	// time.Hour)) holds 25 one-hour buckets, so with Limit 24 they are two
+	// hours wide. Bound the end (Between), or allow a bucket more.
+	Bucket time.Duration
+	// Limit is the bucket budget, 1-10000: the most buckets the range is
+	// divided into — not a row limit (GroupBy returns a row per bucket and
+	// group). With a Bucket and an open end, Limit+1 buckets can come back.
 	Limit int
-	// TimeRange is required.
+	// TimeRange is required and needs a Start; a nil End means now. The end
+	// must lie after the start. Bounds count to the millisecond.
 	TimeRange *TimeRange
-	// GroupBy columns split the series.
+	// GroupBy columns split every bucket into a row per group; each comes
+	// back under its own name.
 	GroupBy []string
-	// FilterAnd holds WHERE predicates only: the Latest marker and groups
-	// are not supported in series queries.
+	// FilterAnd entries are AND-ed: predicates and groups (And, Or), as in
+	// TableQueryParams. The Latest marker is not supported in series
+	// queries.
 	FilterAnd []Filter
 }
 
@@ -205,65 +281,93 @@ func queryWire(q *TableQueryParams, maxLimit int, log *slog.Logger) (map[string]
 		out["timeRange"] = tr
 	}
 	if len(q.FilterAnd) > 0 {
-		filters, err := filtersWire(q.FilterAnd, true, log)
+		filters, err := filtersWire(q.FilterAnd, log)
 		if err != nil {
 			return nil, err
 		}
 		out["filterAnd"] = filters
 	}
 	if q.Columns != nil {
-		cols := make([]any, len(q.Columns))
-		for i, c := range q.Columns {
-			if strings.TrimSpace(c) == "" {
-				return nil, invalidf("columns[%d] must be a non-empty string", i)
-			}
-			cols[i] = c
+		cols, err := namesWire("columns", q.Columns)
+		if err != nil {
+			return nil, err
 		}
 		out["columns"] = cols
+	}
+	if q.ColumnPaths != nil {
+		paths, err := namesWire("columnPaths", q.ColumnPaths)
+		if err != nil {
+			return nil, err
+		}
+		out["columnPaths"] = paths
 	}
 	return out, nil
 }
 
-// seriesWire validates p and returns the payload of the series procedure.
-// Filter operators outside SQLOperators are logged to log as a warning.
+// namesWire returns names, the column names (or paths) of the payload field
+// field, as a list, failing on a blank one.
+func namesWire(field string, names []string) ([]any, error) {
+	out := make([]any, len(names))
+	for i, n := range names {
+		if strings.TrimSpace(n) == "" {
+			return nil, invalidf("%s[%d] must be a non-empty string", field, i)
+		}
+		out[i] = n
+	}
+	return out, nil
+}
+
+// seriesWire validates p and returns the payload of the series procedure,
+// fleetdb's SeriesQueryArgs (since v1.0.58):
+// {metrics: [{ref, method}], limit, timeRange, bucketMs?, groupBy?,
+// filterAnd?}. Filter operators outside SQLOperators are logged to log as a
+// warning.
 func seriesWire(p *SeriesQueryParams, log *slog.Logger) (map[string]any, error) {
 	if p == nil {
 		return nil, invalidf("series query parameters are required")
 	}
-	for _, f := range p.FilterAnd {
-		if containsLatest(f) {
-			return nil, invalidf("the 'latest' marker (and the legacy latest_flag filter) is not supported in series queries — use GetHistory with FilterAnd: []Filter{ironflock.Latest()} to read current values")
-		}
+	if len(p.Metrics) == 0 {
+		return nil, invalidf("metrics must hold at least one metric (a Ref and a Method)")
 	}
-	valid := false
-	for _, m := range downSampleMethods {
-		if p.Method == m {
-			valid = true
-			break
+	metrics := make([]any, len(p.Metrics))
+	for i, m := range p.Metrics {
+		if strings.TrimSpace(m.Ref) == "" {
+			return nil, invalidf("metrics[%d]: ref must be a non-empty string", i)
 		}
-	}
-	if !valid {
-		return nil, invalidf("method must be one of AVG, SUM, COUNT, MIN, MAX, FIRST, LAST, got %q", p.Method)
+		if !slices.Contains(downSampleMethods, m.Method) {
+			return nil, invalidf("metrics[%d]: method must be one of AVG, SUM, COUNT, MIN, MAX, FIRST, LAST, got %q", i, m.Method)
+		}
+		if n := len(m.Column()); n > maxSeriesColumn {
+			return nil, invalidf("metrics[%d]: its column name %q is %d bytes long; it must fit %d", i, m.Column(), n, maxSeriesColumn)
+		}
+		metrics[i] = map[string]any{"ref": m.Ref, "method": string(m.Method)}
 	}
 	if p.Limit < 1 || p.Limit > MaxQueryLimit {
 		return nil, invalidf("limit must be between 1 and %d, got %d", MaxQueryLimit, p.Limit)
 	}
 	if p.TimeRange == nil {
-		return nil, invalidf("timeRange is required for series queries")
+		return nil, invalidf("series queries require a timeRange with a start")
 	}
 	tr, err := timeRangeWire(p.TimeRange)
 	if err != nil {
 		return nil, err
 	}
-	metrics := make([]any, len(p.Metrics))
-	for i, m := range p.Metrics {
-		metrics[i] = m
+	if tr[0] == nil {
+		return nil, invalidf("series queries require a timeRange with a start")
+	}
+	if tr[1] != nil && boundMs(tr[1]) <= boundMs(tr[0]) {
+		return nil, invalidf("the timeRange end must lie after its start")
 	}
 	out := map[string]any{
 		"metrics":   metrics,
-		"method":    string(p.Method),
 		"limit":     int64(p.Limit),
 		"timeRange": tr,
+	}
+	if p.Bucket != 0 {
+		if p.Bucket < time.Second || p.Bucket%time.Millisecond != 0 {
+			return nil, invalidf("bucket must be 0 (automatic) or at least 1s in whole milliseconds, got %v", p.Bucket)
+		}
+		out["bucketMs"] = p.Bucket.Milliseconds()
 	}
 	if p.GroupBy != nil {
 		groupBy := make([]any, len(p.GroupBy))
@@ -272,14 +376,37 @@ func seriesWire(p *SeriesQueryParams, log *slog.Logger) (map[string]any, error) 
 		}
 		out["groupBy"] = groupBy
 	}
+	for _, f := range p.FilterAnd {
+		if containsLatest(f) {
+			return nil, invalidf("the 'latest' marker (and the legacy latest_flag filter) is not supported in series queries — use GetHistory with FilterAnd: []Filter{ironflock.Latest()} to read current values")
+		}
+	}
 	if len(p.FilterAnd) > 0 {
-		filters, err := filtersWire(p.FilterAnd, false, log)
+		filters, err := filtersWire(p.FilterAnd, log)
 		if err != nil {
 			return nil, err
 		}
 		out["filterAnd"] = filters
 	}
 	return out, nil
+}
+
+// boundMs returns the time a bound of timeRangeWire's result denotes, in ms
+// since the epoch, as the data backend compares it: a string read as Date
+// reads it, a number as the double it is in JavaScript.
+func boundMs(b any) float64 {
+	switch v := b.(type) {
+	case string:
+		ms, _ := isoTime(v) // valid: timeRangeWire checked it
+		return float64(ms)
+	case int64:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case float64:
+		return v
+	}
+	return math.NaN()
 }
 
 // containsLatest reports whether f is, or contains, the latest marker or a
@@ -296,10 +423,10 @@ func containsLatest(f Filter) bool {
 	return false
 }
 
-func filtersWire(filters []Filter, allowGroups bool, log *slog.Logger) ([]any, error) {
+func filtersWire(filters []Filter, log *slog.Logger) ([]any, error) {
 	out := make([]any, len(filters))
 	for i, f := range filters {
-		w, err := filterWire(f, allowGroups, fmt.Sprintf("filterAnd[%d]", i), log)
+		w, err := filterWire(f, fmt.Sprintf("filterAnd[%d]", i), log)
 		if err != nil {
 			return nil, err
 		}
@@ -308,15 +435,12 @@ func filtersWire(filters []Filter, allowGroups bool, log *slog.Logger) ([]any, e
 	return out, nil
 }
 
-func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[string]any, error) {
+func filterWire(f Filter, path string, log *slog.Logger) (map[string]any, error) {
 	switch {
 	case f.Latest:
 		return map[string]any{"latest": true}, nil
 	case f.Combinator != "" || f.Filters != nil:
-		if !allowGroups {
-			return nil, invalidf("%s: filter groups are not supported here; use plain predicates", path)
-		}
-		comb := strings.ToUpper(f.Combinator)
+		comb := strings.ToUpper(strings.TrimSpace(f.Combinator))
 		if comb != "AND" && comb != "OR" {
 			return nil, invalidf("%s: combinator must be \"AND\" or \"OR\", got %q", path, f.Combinator)
 		}
@@ -325,7 +449,7 @@ func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[
 		}
 		subs := make([]any, len(f.Filters))
 		for i, sub := range f.Filters {
-			w, err := filterWire(sub, true, fmt.Sprintf("%s.filters[%d]", path, i), log)
+			w, err := filterWire(sub, fmt.Sprintf("%s.filters[%d]", path, i), log)
 			if err != nil {
 				return nil, err
 			}
@@ -341,13 +465,16 @@ func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[
 		return nil, invalidf("%s: predicate on column %q has no operator", path, f.Column)
 	}
 	op := strings.ToUpper(strings.TrimSpace(f.Operator))
-	if !slices.Contains(sqlOperators, op) {
+	wireOp := f.Operator
+	if slices.Contains(sqlOperators, op) {
+		wireOp = op // the data backend matches operators exactly
+	} else {
 		if log == nil {
 			log = slog.Default()
 		}
 		log.Warn(fmt.Sprintf("Operator '%s' is not in standard list: %v", f.Operator, sqlOperators))
 	}
-	out := map[string]any{"column": f.Column, "operator": f.Operator}
+	out := map[string]any{"column": f.Column, "operator": wireOp}
 
 	if op == "IS NULL" || op == "IS NOT NULL" {
 		if f.Value != nil {
@@ -355,34 +482,38 @@ func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[
 		}
 		return out, nil
 	}
-	if f.Value == nil {
-		return nil, invalidf("%s: predicate on column %q needs a value (use IsNull/IsNotNull to test for NULL)", path, f.Column)
-	}
-	isList := isSlice(f.Value)
-	if op == "IN" || op == "NOT IN" {
-		if !isList {
-			if _, ok := f.Value.(string); !ok {
-				return nil, invalidf("%s: operator %q requires a list of values", path, f.Operator)
-			}
-		}
-	} else if isList {
-		return nil, invalidf("%s: operator %q does not support list values", path, f.Operator)
-	}
+	// The value's shape is what it converts to, not its Go kind: a
+	// uuid.UUID is an array that encodes as a string.
 	v, err := normalize(f.Value)
 	if err != nil {
 		return nil, invalidf("%s: %v", path, err)
 	}
-	if list, ok := v.([]any); ok {
-		for i, e := range list {
-			switch e.(type) {
-			case string, int64, uint64, float64:
-			default:
-				return nil, invalidf("%s: value[%d] must be a string or a number, got %T", path, i, e)
+	if op == "IN" || op == "NOT IN" {
+		if v == nil && isNilSlice(f.Value) {
+			v = []any{} // the empty set: IN matches no row, NOT IN every row
+		}
+		switch x := v.(type) {
+		case []any:
+			for i, e := range x {
+				switch e.(type) {
+				case string, int64, uint64, float64, bool:
+				default:
+					return nil, invalidf("%s: value[%d] must be a string, number or bool, got %T", path, i, e)
+				}
 			}
+		case string: // the comma-joined form
+		case nil:
+			return nil, invalidf("%s: predicate on column %q needs a value (use IsNull/IsNotNull to test for NULL)", path, f.Column)
+		default:
+			return nil, invalidf("%s: operator %q requires a list of values, got %T", path, f.Operator, f.Value)
 		}
 	} else {
 		switch v.(type) {
 		case string, int64, uint64, float64, bool:
+		case nil:
+			return nil, invalidf("%s: predicate on column %q needs a value (use IsNull/IsNotNull to test for NULL)", path, f.Column)
+		case []any:
+			return nil, invalidf("%s: operator %q does not support list values", path, f.Operator)
 		default:
 			return nil, invalidf("%s: value must be a string, number or bool, got %T", path, f.Value)
 		}
@@ -391,12 +522,11 @@ func filterWire(f Filter, allowGroups bool, path string, log *slog.Logger) (map[
 	return out, nil
 }
 
-func isSlice(v any) bool {
-	if _, ok := v.([]byte); ok {
-		return false
-	}
-	k := reflect.ValueOf(v).Kind()
-	return k == reflect.Slice || k == reflect.Array
+// isNilSlice reports whether v is a nil slice, other than binary data
+// ([]byte and its kin).
+func isNilSlice(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Slice && rv.IsNil() && rv.Type().Elem().Kind() != reflect.Uint8
 }
 
 // The data backend turns each string bound of a TimeRange into a time with
@@ -425,11 +555,14 @@ const (
 // range. Days must exist in their month, and hours, minutes and seconds lie
 // in 00-23, 00-59 and 00-59, except for 24:00, 24:00:00 and 24:00:00.0…, the
 // end of the day. A time without a zone is read as UTC, the data backend's
-// time zone. Date reads more than this, but not correctly: it moves a day a
-// month does not have into the next month (2026-02-30 is 2026-03-02), and
-// fails on hours without minutes, offsets of hours only, basic format,
-// commas and week or ordinal dates. What it reads besides that (2026-1-1,
-// an offset after a date) is not ISO 8601.
+// time zone. The space separator is accepted in the years outside 0-99
+// only: with a space Date reads the string with its legacy parser, which
+// takes the years 0-99 as 1950-2049, or fails on them (0013-0031). Date
+// reads more than this, but not correctly: it moves a day a month does not
+// have into the next month (2026-02-30 is 2026-03-02), and fails on hours
+// without minutes, offsets of hours only, basic format, commas and week or
+// ordinal dates. What it reads besides that (2026-1-1, an offset after a
+// date) is not ISO 8601.
 func isoTime(s string) (ms int64, ok bool) {
 	p := isoScanner{s: s}
 	year, ok := p.year()
@@ -446,7 +579,9 @@ func isoTime(s string) (ms int64, ok bool) {
 			if day, ok = p.number(2, 1, daysIn(year, month)); !ok {
 				return 0, false
 			}
-			if p.skip('T') || p.skip('t') || p.skip(' ') {
+			// The value of the year counts, six-digit years included:
+			// Date misreads "+000001-06-15 12:00" too.
+			if p.skip('T') || p.skip('t') || ((year < 0 || year > 99) && p.skip(' ')) {
 				if hour, minute, second, milli, ok = p.clock(); !ok {
 					return 0, false
 				}
@@ -668,8 +803,17 @@ func timeRangeWire(tr *TimeRange) ([]any, error) {
 			}
 			out[i] = v // as given, byte for byte
 			hasStr = true
-		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-			n, _ := normalize(v)
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			n, _ := normalize(v) // never fails for an integer
+			out[i] = n
+			hasNum = true
+		case float32, float64:
+			n, _ := normalize(v) // never fails for a float
+			// NaN and ±Inf reach the data backend as null, an open bound,
+			// which would drop the time filter without a word.
+			if f := n.(float64); math.IsNaN(f) || math.IsInf(f, 0) {
+				return nil, invalidf("timeRange bounds must be finite epoch-ms numbers (nil for an open end), got %v", v)
+			}
 			out[i] = n
 			hasNum = true
 		default:

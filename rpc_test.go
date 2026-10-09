@@ -2,11 +2,14 @@ package ironflock
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )
@@ -300,5 +303,91 @@ func TestSetDeviceLocation(t *testing.T) {
 	_, err := f.SetDeviceLocation(bg, 1, 2)
 	if want := "Device location update failed with WAMP error 'wamp.error.no_such_procedure'"; err == nil || err.Error() != want {
 		t.Errorf("error %v", err)
+	}
+}
+
+// rpcEnum is encoded through its MarshalText method.
+type rpcEnum int
+
+func (e rpcEnum) MarshalText() ([]byte, error) { return []byte(fmt.Sprintf("level-%d", int(e))), nil }
+
+// rpcStatus has fields encoding/json converts: a ",string" option, a
+// MarshalText type, a json.Number and a time.Time in another zone.
+type rpcStatus struct {
+	Count int         `json:"count,string"`
+	Level rpcEnum     `json:"level"`
+	Num   json.Number `json:"num"`
+	When  time.Time   `json:"when"`
+}
+
+// A device function's result and error payloads are sent as every other
+// payload of the package: normalized (see normalize). The WAMP client's codec
+// would send them as they are — a map with integer keys the router cannot
+// decode, so the caller never gets an answer; a time.Time as a msgpack
+// timestamp; a string with invalid UTF-8 that makes a Python caller drop its
+// session.
+func TestRegisterDeviceFunctionNormalizesWhatTheHandlerReturns(t *testing.T) {
+	f := flock(t)
+	cest := time.FixedZone("CEST", 2*3600)
+	when := time.Date(2026, 10, 8, 14, 0, 0, 123456789, cest)
+	status := rpcStatus{Count: 7, Level: 2, Num: "12", When: when}
+	statusWire := map[string]any{"count": "7", "level": "level-2", "num": int64(12), "when": "2026-10-08T12:00:00.123456789Z"}
+	cases := []struct {
+		name      string
+		value     any
+		err       error
+		wantValue any
+		wantErr   *WampError
+	}{
+		{"nil", nil, nil, nil, nil},
+		{"time", when, nil, "2026-10-08T12:00:00.123456789Z", nil},
+		{"integer keys", map[int]string{1: "a"}, nil, map[string]any{"1": "a"}, nil},
+		{"struct", status, nil, statusWire, nil},
+		{"invalid UTF-8", "sensor\xff\xfeline", nil, "sensor��line", nil},
+		{"Result", Result{Args: []any{when}, Kwargs: map[string]any{"m": map[int]int{1: 2}}}, nil,
+			&Result{Args: []any{"2026-10-08T12:00:00.123456789Z"}, Kwargs: map[string]any{"m": map[string]any{"1": int64(2)}}}, nil},
+		{"*Result", &Result{Args: []any{status}, Details: map[string]any{"x": 1}}, nil, &Result{Args: []any{statusWire}}, nil},
+		{"nil *Result", (*Result)(nil), nil, nil, nil},
+		{"WampError", nil, fmt.Errorf("wrapped: %w", &WampError{URI: "app.error.bad", Args: []any{map[int]string{1: "a"}},
+			Kwargs: map[string]any{"at": when}}), nil,
+			&WampError{URI: "app.error.bad", Args: []any{map[string]any{"1": "a"}}, Kwargs: map[string]any{"at": "2026-10-08T12:00:00.123456789Z"}}},
+		{"plain error", nil, errors.New("bad frame \xff"), nil,
+			&WampError{URI: wamp.URIRuntimeError, Args: []any{"bad frame �"}}},
+		{"error without a URI", nil, &WampError{Args: []any{1}}, nil,
+			&WampError{URI: wamp.URIRuntimeError, Args: []any{(&WampError{Args: []any{1}}).Error()}}},
+		{"unsendable result", complex(1, 2), nil, nil, &WampError{URI: wamp.URIRuntimeError, Args: []any{
+			"the result of procedure '10.12.20.DEV.fn' cannot be sent: unsupported type complex128"}}},
+		{"unsendable Result kwargs", &Result{Kwargs: map[string]any{"cb": func() {}}}, nil, nil, &WampError{URI: wamp.URIRuntimeError,
+			Args: []any{"the result of procedure '10.12.20.DEV.fn' cannot be sent: its kwargs: cb: unsupported type func()"}}},
+		{"unsendable error payload", nil, &WampError{URI: "app.error.bad", Args: []any{make(chan int)}}, nil,
+			&WampError{URI: wamp.URIRuntimeError, Args: []any{
+				"the result of procedure '10.12.20.DEV.fn' cannot be sent: the args of its error app.error.bad: [0]: unsupported type chan int"}}},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			name := fmt.Sprintf("fn%d", i)
+			if _, err := f.RegisterDeviceFunction(bg, name, func(context.Context, *Invocation) (any, error) { return c.value, c.err }); err != nil {
+				t.Fatal(err)
+			}
+			regs := f.own.allRegs()
+			value, err := regs[len(regs)-1].Handler(bg, &Invocation{Procedure: "10.12.20.DEV." + name})
+			if !reflect.DeepEqual(value, c.wantValue) {
+				t.Errorf("value %#v\nwant  %#v", value, c.wantValue)
+			}
+			want := c.wantErr
+			if want != nil && strings.Contains(fmt.Sprint(want.Args...), "'10.12.20.DEV.fn'") {
+				want = &WampError{URI: want.URI, Args: []any{strings.Replace(want.Args[0].(string), "DEV.fn'", "DEV."+name+"'", 1)}}
+			}
+			var werr *WampError
+			switch {
+			case want == nil && err != nil:
+				t.Errorf("error %v", err)
+			case want != nil && (!errors.As(err, &werr) || !reflect.DeepEqual(werr, want)):
+				t.Errorf("error %#v\nwant  %#v", err, want)
+			}
+		})
+	}
+	if n := strings.Count(f.logs.String(), "cannot be sent"); n != 3 {
+		t.Errorf("%d unsendable results logged, want 3:\n%s", n, f.logs)
 	}
 }

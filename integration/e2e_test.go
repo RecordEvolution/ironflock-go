@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,7 +76,12 @@ func TestDeviceFunctionInteropWithPython(t *testing.T) {
 	ifl := startIronFlock(t, ctx)
 
 	// Python calls a function the Go SDK registered.
+	callerAuthID := make(chan any, 1)
 	_, err := ifl.RegisterDeviceFunction(ctx, "go_echo", func(ctx context.Context, inv *ironflock.Invocation) (any, error) {
+		select {
+		case callerAuthID <- inv.Details["caller_authid"]:
+		default:
+		}
 		return map[string]any{"args": inv.Args, "kwargs": inv.Kwargs, "from": "go"}, nil
 	})
 	if err != nil {
@@ -94,6 +100,11 @@ func TestDeviceFunctionInteropWithPython(t *testing.T) {
 	want := map[string]any{"args": []any{1.0, "two"}, "kwargs": map[string]any{"k": true}, "from": "go"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("python called go_echo: got %#v, want %#v", got, want)
+	}
+	// The platform rewrites a session's authid to the device serial, whichever
+	// credential it presented.
+	if id := <-callerAuthID; id != testSerial {
+		t.Errorf("callee saw caller_authid %#v, want the device serial %q", id, testSerial)
 	}
 
 	// The Go SDK calls a function the Python SDK registered.
@@ -143,11 +154,12 @@ func TestSubscribeToTableEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ifl.PublishToTable(ctx, "e2e_table", ironflock.Row{"temperature": 9.5, "source": "go"}); err != nil {
+	if err := ifl.PublishToTable(ctx, "e2e_table", ironflock.Row{"tsp": "2026-01-01T00:00:01Z", "temperature": 9.5, "source": "go"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ifl.PublishRowsToTable(ctx, "e2e_table", []ironflock.Row{
-		{"temperature": 1, "source": "go-bulk"}, {"temperature": 2, "source": "go-bulk"}}); err != nil {
+		{"tsp": "2026-01-01T00:00:02Z", "temperature": 1, "source": "go-bulk"},
+		{"tsp": "2026-01-01T00:00:03Z", "temperature": 2, "source": "go-bulk"}}); err != nil {
 		t.Fatal(err)
 	}
 	got := collect(t, rows, 3, 10*time.Second)
@@ -175,7 +187,7 @@ func TestSubscribeToTableEndToEnd(t *testing.T) {
 	if err := sub.Unsubscribe(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := ifl.PublishToTable(ctx, "e2e_table", ironflock.Row{"source": "after"}); err != nil {
+	if err := ifl.PublishToTable(ctx, "e2e_table", ironflock.Row{"tsp": "2026-01-01T00:00:04Z", "source": "after"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -195,7 +207,8 @@ func TestConsumedAppRealtimeAndGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.App != "weather" || app.Stage != "dev" || len(app.Tables) != 1 || app.Tables[0].Tablename != "readings" {
+	// The platform echoes the app name as the caller spelled it.
+	if app.App != "Weather" || app.Stage != "dev" || len(app.Tables) != 1 || app.Tables[0].Tablename != "readings" {
 		t.Fatalf("handle %+v", app)
 	}
 	again, err := ifl.ConnectToApp(ctx, "weather")
@@ -227,8 +240,9 @@ func TestConsumedAppRealtimeAndGuards(t *testing.T) {
 		ironflock.Or(ironflock.Where("api_key", "=", "x"), ironflock.IsNull("temp"))}}); !errors.As(err, &cerr) || cerr.Code != ironflock.CodeSecretColumn {
 		t.Fatalf("secret column inside a group: %v", err)
 	}
-	if _, err := app.GetSeriesHistory(ctx, "hourly", ironflock.SeriesQueryParams{Metrics: []string{"temp"}, Method: ironflock.MethodAvg, Limit: 1,
-		TimeRange: &ironflock.TimeRange{}}); !errors.As(err, &cerr) || cerr.Code != ironflock.CodePrivateTable {
+	if _, err := app.GetSeriesHistory(ctx, "hourly", ironflock.SeriesQueryParams{
+		Metrics: []ironflock.SeriesMetric{{Ref: "temp_avg", Method: ironflock.MethodAvg}}, Limit: 1,
+		TimeRange: &ironflock.TimeRange{Start: int64(0)}}); !errors.As(err, &cerr) || cerr.Code != ironflock.CodePrivateTable {
 		t.Fatalf("series on a transform: %v", err)
 	}
 
@@ -251,12 +265,20 @@ func TestConsumedAppRealtimeAndGuards(t *testing.T) {
 func TestPerAppCredentialRotation(t *testing.T) {
 	deviceEnv(t)
 	dir := os.Getenv("IRONFLOCK_ENV_DIR")
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(dir, name+".txt"))
+		if err != nil {
+			t.Skipf("needs the per-app credential of the harness (IRONFLOCK_TEST_ENV_DIR): %v", err)
+		}
+		return strings.TrimSpace(string(data))
+	}
 	write := func(name, value string) {
-		if err := os.WriteFile(filepath.Join(dir, name+".txt"), []byte(value+"\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name+".txt"), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("APP_AUTH_ID", "app-26-per-app")
+	read("APP_AUTH_ID")
+	secret := read("APP_AUTH_SECRET")
 	write("APP_AUTH_SECRET", "wrong-secret")
 
 	ifl, err := ironflock.New(ironflock.WithURL(platformURL(t)))
@@ -280,7 +302,7 @@ func TestPerAppCredentialRotation(t *testing.T) {
 	}
 	// The agent rotates the credential while the app runs: the next attempt
 	// must pick it up without a restart.
-	write("APP_AUTH_SECRET", "per-app-secret")
+	write("APP_AUTH_SECRET", secret)
 	select {
 	case err := <-started:
 		if err != nil {
@@ -311,33 +333,25 @@ func TestRouterRestartRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted := make(chan error, 1)
-	go func() {
-		out, err := exec.Command("bash", "-c", restart).CombinedOutput()
-		if err != nil {
-			err = errors.New(err.Error() + ": " + string(out))
-		}
-		restarted <- err
-	}()
+	restarted := startRestart(restart)
 
 	// Wait for the outage, then issue a table write: it must ride out the
 	// restart (reconnect window) instead of failing.
-	deadline := time.Now().Add(30 * time.Second)
-	for ifl.IsConnected() && time.Now().Before(deadline) {
-		time.Sleep(100 * time.Millisecond)
+	finished, err := waitForOutage(ifl.IsConnected, restarted, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ifl.IsConnected() {
-		t.Fatal("connection never went down")
-	}
-	res, err := ifl.AppendToTable(ctx, "restart_table", ironflock.Row{"source": "during-outage"})
+	res, err := ifl.AppendToTable(ctx, "restart_table", ironflock.Row{"tsp": "2026-01-01T00:00:05Z", "source": "during-outage"})
 	if err != nil {
 		t.Fatalf("append during the outage: %v", err)
 	}
 	if v, _ := res.Value().(map[string]any); v["success"] != true {
 		t.Fatalf("append result %v", res.Value())
 	}
-	if err := <-restarted; err != nil {
-		t.Fatal(err)
+	if !finished {
+		if err := <-restarted; err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The table subscription was restored: the appended row comes back on
 	// transformed.restart_table.
@@ -348,6 +362,73 @@ func TestRouterRestartRecovery(t *testing.T) {
 	got, err := ifl.CallDeviceFunction(ctx, 42, "restart_echo")
 	if err != nil || got.Value() != "pong" {
 		t.Fatalf("call after restart: %v %v", got, err)
+	}
+}
+
+// startRestart runs the restart command in the background — with bash -c,
+// as the command may set variables such as STATE_DIR — and returns the
+// channel its outcome arrives on: nil, or an error naming the command and
+// holding its output.
+func startRestart(cmd string) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		out, err := exec.Command("bash", "-c", cmd).CombinedOutput()
+		if err != nil {
+			err = errors.New("restart command " + strconv.Quote(cmd) + ": " + err.Error() + ": " + string(out))
+		}
+		done <- err
+	}()
+	return done
+}
+
+// waitForOutage waits up to timeout for isConnected to turn false while the
+// restart runs. A restart that fails ends the wait at once with its own
+// error, rather than with a timeout that hides it. finished reports whether
+// the restart's outcome has been taken from restarted already.
+func waitForOutage(isConnected func() bool, restarted <-chan error, timeout time.Duration) (finished bool, err error) {
+	deadline := time.Now().Add(timeout)
+	for isConnected() {
+		if !time.Now().Before(deadline) {
+			return finished, errors.New("connection never went down")
+		}
+		select {
+		case err := <-restarted:
+			if err != nil {
+				return true, err
+			}
+			finished = true
+			restarted = nil // done: receive no more
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return finished, nil
+}
+
+// The outage wait of TestRouterRestartRecovery, without a router: a restart
+// command that fails is reported at once with its output, a restart that
+// leaves the connection up still times out as such, and an outage ends the
+// wait.
+func TestWaitForOutage(t *testing.T) {
+	up := func() bool { return true }
+	start := time.Now()
+	_, err := waitForOutage(up, startRestart("echo boom >&2; exit 3"), 20*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("failed restart: err = %v, want the command's output", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("failed restart reported after %v, want at once", d)
+	}
+
+	finished, err := waitForOutage(up, startRestart("true"), time.Second)
+	if err == nil || err.Error() != "connection never went down" || !finished {
+		t.Fatalf("restart without an outage: finished %v, err %v; want the timeout after the restart finished", finished, err)
+	}
+
+	var polls atomic.Int32
+	goesDown := func() bool { return polls.Add(1) < 3 }
+	finished, err = waitForOutage(goesDown, make(chan error), 20*time.Second)
+	if err != nil || finished {
+		t.Fatalf("outage: finished %v, err %v; want the outage seen, the restart still running", finished, err)
 	}
 }
 

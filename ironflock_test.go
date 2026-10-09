@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RecordEvolution/ironflock-go/internal/env"
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
@@ -679,7 +682,7 @@ func gatedOps() []gatedOp {
 		}},
 		{"GetSeriesHistory", true, func(f *testFlock) error {
 			_, err := f.GetSeriesHistory(bg, "sensordata", SeriesQueryParams{
-				Metrics: []string{"temp"}, Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{Start: int64(0)}})
+				Metrics: []SeriesMetric{{"temp", MethodAvg}}, Limit: 1, TimeRange: &TimeRange{Start: int64(0)}})
 			return err
 		}},
 		{"RevealSecrets", true, func(f *testFlock) error {
@@ -991,4 +994,118 @@ func TestStopClosesTheFileStoresIdleConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the pooled connections to close", func() bool { return persistConnGoroutines() == 0 })
+}
+
+// The connection reads the per-app credential from the device agent's
+// /data/env mirror on every attempt, and the agent makes it readable by root
+// only: in a container that runs as another user Start says so, once, on the
+// app's logger.
+func TestStartWarnsWhenTheCredentialMirrorIsUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permissions do not apply to this process")
+	}
+	env.ResetWarning()
+	t.Cleanup(env.ResetWarning)
+	f := unstartedFlock(t)
+	unreadable := filepath.Join(os.Getenv("IRONFLOCK_ENV_DIR"), "APP_AUTH_SECRET.txt")
+	if err := os.WriteFile(unreadable, []byte("rotated"), 0); err != nil {
+		t.Fatal(err)
+	}
+	f.start(t)
+	if n := strings.Count(f.logs.String(), "level=WARN"); n != 1 {
+		t.Fatalf("%d warnings, want 1:\n%s", n, f.logs)
+	}
+	mustContain(t, f.logs.String(), "APP_AUTH_SECRET.txt: permission denied", "using the environment the container started with")
+
+	// An explicit credential does not come from the mirror.
+	env.ResetWarning()
+	explicit := newTestFlock(t, WithCredentials("id", "secret"))
+	explicit.start(t)
+	if strings.Contains(explicit.logs.String(), "level=WARN") {
+		t.Errorf("warned with explicit credentials:\n%s", explicit.logs)
+	}
+}
+
+// Stop recognizes main's context per instance: when another IronFlock's Run
+// runs inside main, Stop with the inner main's context — which the outer
+// Stop cancels too — still completes its shutdown.
+func TestRunNestedStopWithTheInnerMainsContext(t *testing.T) {
+	checkGoroutines(t)
+	outer := unstartedFlock(t)
+	inner := newTestFlock(t)
+	var stopErr error
+	release := make(chan struct{})
+	outer.own.stopFn = func(ctx context.Context) error {
+		<-release // the router's GOODBYE
+		return ctx.Err()
+	}
+	err := outer.Run(context.Background(), func(octx context.Context) error {
+		return inner.Run(octx, func(ictx context.Context) error {
+			go func() {
+				<-ictx.Done() // the outer Stop cancels the inner main's context too
+				close(release)
+			}()
+			stopErr = outer.Stop(ictx)
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if stopErr != nil {
+		t.Errorf("outer.Stop(inner main's context) = %v, want a complete shutdown", stopErr)
+	}
+	if outer.own.stopCount() != 1 || inner.own.stopCount() != 1 {
+		t.Errorf("stopped outer %d, inner %d times", outer.own.stopCount(), inner.own.stopCount())
+	}
+}
+
+// main's context inherits the deadline of Run's context and is cancelled by
+// Stop: a Stop with main's context is bounded only by the run stop timeout,
+// like the Stop Run performs after main, also once that deadline has passed.
+func TestRunMainStopsAfterTheRunDeadline(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	var stopCtxErr error
+	f.own.stopFn = func(ctx context.Context) error {
+		stopCtxErr = ctx.Err()
+		if _, ok := ctx.Deadline(); !ok {
+			return errors.New("Stop is not bounded")
+		}
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	var stopErr error
+	err := f.Run(ctx, func(ctx context.Context) error {
+		<-ctx.Done()
+		stopErr = f.Stop(ctx)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if stopErr != nil || stopCtxErr != nil {
+		t.Errorf("Stop(main's context after its deadline) = %v, its context %v; want a live context", stopErr, stopCtxErr)
+	}
+
+	// A deadline main sets itself does not cut the shutdown short either.
+	g := unstartedFlock(t)
+	var deadline time.Time
+	g.own.stopFn = func(ctx context.Context) error {
+		deadline, _ = ctx.Deadline()
+		return ctx.Err()
+	}
+	err = g.Run(context.Background(), func(ctx context.Context) error {
+		short, cancel := context.WithTimeout(ctx, time.Millisecond)
+		defer cancel()
+		<-short.Done()
+		return g.Stop(short)
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if left := time.Until(deadline); left < g.runStopTimeout/2 {
+		t.Errorf("Stop was bounded by main's deadline: %v left", left)
+	}
 }

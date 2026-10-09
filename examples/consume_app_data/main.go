@@ -53,16 +53,22 @@ func main() {
 		}
 		log.Printf("history: %v", rows)
 
+		// Daily averages of the last week, one row per day (a day's bucket
+		// starts at the time of day the range starts).
+		now := time.Now()
+		avg := ironflock.SeriesMetric{Ref: "temperature", Method: ironflock.MethodAvg}
 		series, err := weather.GetSeriesHistory(ctx, "readings", ironflock.SeriesQueryParams{
-			Metrics:   []string{"temperature"},
-			Method:    ironflock.MethodAvg,
-			Limit:     100,
-			TimeRange: ironflock.Since(time.Now().Add(-7 * 24 * time.Hour)),
+			Metrics:   []ironflock.SeriesMetric{avg},
+			Bucket:    24 * time.Hour,
+			Limit:     7,
+			TimeRange: ironflock.Between(now.Add(-7*24*time.Hour), now),
 		})
 		if err != nil {
 			return err
 		}
-		log.Printf("series: %v", series)
+		for _, day := range series {
+			log.Printf("day starting %v: %v", day["tsp"], day[avg.Column()])
+		}
 
 		_, err = weather.SubscribeToTable(ctx, "readings", func(ev *ironflock.Event) {
 			log.Printf("new reading: %v", ev.Row())

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -449,5 +450,142 @@ func TestFakeConnFollowsWampConnection(t *testing.T) {
 			err = c.Stop(ctx)
 			expect("a second Stop", err, err == nil)
 		})
+	}
+}
+
+// A device function's result reaches the caller as every other payload of
+// the package is sent (see normalize), through a real router: a map with
+// integer keys, which the router cannot decode as the WAMP client's codec
+// encodes it, would otherwise never be answered.
+func TestDeviceFunctionResultsAreNormalizedOnTheWire(t *testing.T) {
+	tr := newTestRouter(t, true)
+	callee := startedRealFlock(t, tr)
+	caller := startedRealFlock(t, tr)
+	when := time.Date(2026, 10, 8, 14, 0, 0, 123456789, time.FixedZone("CEST", 2*3600))
+	results := map[string]func() (any, error){
+		"intkey":  func() (any, error) { return map[int]string{1: "a"}, nil },
+		"time":    func() (any, error) { return Result{Kwargs: map[string]any{"at": when}}, nil },
+		"utf8":    func() (any, error) { return "sensor\xff\xfeline", nil },
+		"complex": func() (any, error) { return complex(1, 2), nil },
+		"error":   func() (any, error) { return nil, errors.New("bad frame \xff") },
+		"panic":   func() (any, error) { panic("bad frame \xff") },
+	}
+	for name, fn := range results {
+		if _, err := callee.RegisterDeviceFunction(timeout(t, 5*time.Second), "ret_"+name,
+			func(context.Context, *Invocation) (any, error) { return fn() }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := func(name string) (*Result, error) {
+		return caller.CallDeviceFunction(timeout(t, 3*time.Second), 12, "ret_"+name)
+	}
+
+	res, err := call("intkey")
+	if err != nil || !reflect.DeepEqual(res.Value(), map[string]any{"1": "a"}) {
+		t.Errorf("intkey: %v, %v", res, err)
+	}
+	res, err = call("time")
+	if err != nil || res.Kwargs["at"] != "2026-10-08T12:00:00.123456789Z" {
+		t.Errorf("time: %#v, %v", res, err)
+	}
+	res, err = call("utf8")
+	if err != nil || res.Value() != "sensor��line" {
+		t.Errorf("utf8: %#v, %v", res, err)
+	}
+	_, err = call("complex")
+	var werr *WampError
+	if !errors.As(err, &werr) || werr.URI != wamp.URIRuntimeError ||
+		!strings.Contains(fmt.Sprint(werr.Args...), "cannot be sent: unsupported type complex128") {
+		t.Errorf("complex: %v, want a prompt runtime_error", err)
+	}
+	_, err = call("error")
+	if !errors.As(err, &werr) || werr.URI != wamp.URIRuntimeError || !reflect.DeepEqual(werr.Args, []any{"bad frame �"}) {
+		t.Errorf("error: %#v", err)
+	}
+	_, err = call("panic")
+	if !errors.As(err, &werr) || werr.URI != wamp.URIRuntimeError || len(werr.Args) != 1 ||
+		!strings.HasSuffix(fmt.Sprint(werr.Args[0]), ".ret_panic' panicked: bad frame �") {
+		t.Errorf("panic: %v", err)
+	}
+}
+
+// registerStreamingRead registers a nexus callee for procedure that answers
+// as fleetdb answers a large read: rows (newest first) in progressive results
+// [chunkIndex, rows] of per rows each, and the summary. A caller that does
+// not ask for progressive results is refused with result_too_large. After
+// the first chunk the callee waits for hold, unless it is nil.
+func registerStreamingRead(t *testing.T, cli *client.Client, procedure string, rows []any, per int, hold <-chan struct{}) {
+	t.Helper()
+	err := cli.Register(procedure, func(ctx context.Context, inv *nxwamp.Invocation) client.InvokeResult {
+		if inv.Details[nxwamp.OptReceiveProgress] != true {
+			return client.InvokeResult{Err: URIResultTooLarge, Args: nxwamp.List{"caller cannot receive progressive results"}}
+		}
+		chunks := 0
+		for i := 0; i < len(rows); i += per {
+			if err := cli.SendProgress(ctx, nxwamp.List{chunks, rows[i:min(i+per, len(rows))]}, nil); err != nil {
+				return client.InvokeResult{Err: "test.error.progress", Args: nxwamp.List{err.Error()}}
+			}
+			chunks++
+			if hold != nil {
+				select {
+				case <-hold:
+				case <-ctx.Done():
+					return client.InvokeResult{Err: nxwamp.ErrCanceled}
+				}
+			}
+		}
+		return client.InvokeResult{Args: nxwamp.List{map[string]any{
+			"chunked": true, "chunkCount": chunks, "totalRows": len(rows), "order": "asc"}}}
+	}, nil)
+	if err != nil {
+		t.Fatalf("Register %s: %v", procedure, err)
+	}
+}
+
+// A large read through a real connection and router: the data backend's
+// progressive results reach the read through the connection's OnProgress,
+// and GetHistory returns the rows of a single read, in ascending order. A
+// read whose context ends while it streams fails with the context's error,
+// and the connection serves the next read.
+func TestGetHistoryReassemblesAStreamedResult(t *testing.T) {
+	tr := newTestRouter(t, true)
+	f := startedRealFlock(t, tr)
+	callee := tr.local(t)
+	const n = 250
+	rows := make([]any, n)
+	for i := range rows {
+		rows[i] = map[string]any{"tsp": int64(n - i), "payload": strings.Repeat("x", 100)}
+	}
+	registerStreamingRead(t, callee, "history.transformed.big", rows, 40, nil)
+	hold := make(chan struct{})
+	defer close(hold)
+	registerStreamingRead(t, callee, "history.transformed.held", rows, 40, hold)
+
+	got, err := f.GetHistory(timeout(t, 10*time.Second), "big", &TableQueryParams{Limit: n})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != n {
+		t.Fatalf("%d rows, want %d", len(got), n)
+	}
+	for i, r := range got {
+		if r["tsp"] != int64(i+1) {
+			t.Fatalf("row %d has tsp %v: not in ascending order", i, r["tsp"])
+		}
+	}
+
+	// Without progressive results the read is refused, as fleetdb refuses it.
+	_, err = f.Connection().Call(timeout(t, 5*time.Second), "history.transformed.big", []any{map[string]any{"limit": n}}, nil, nil, 0)
+	if WampURI(err) != URIResultTooLarge {
+		t.Errorf("a call without OnProgress: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := f.GetHistory(ctx, "held", &TableQueryParams{Limit: n}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a read whose context ends while it streams: %v", err)
+	}
+	if got, err := f.GetHistory(timeout(t, 10*time.Second), "big", &TableQueryParams{Limit: n}); err != nil || len(got) != n {
+		t.Errorf("the next read: %d rows, %v", len(got), err)
 	}
 }

@@ -273,7 +273,8 @@ func TestReconnectWindowOnlyForTableOperations(t *testing.T) {
 		_, _ = f.ReportError(bg, "x")
 		_, _ = f.ReportError(bg, "x", ReportErrorOptions{Append: true})
 		_, _ = f.GetHistory(bg, "t", nil)
-		_, _ = f.GetSeriesHistory(bg, "t", SeriesQueryParams{Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}})
+		_, _ = f.GetSeriesHistory(bg, "t", SeriesQueryParams{Metrics: []SeriesMetric{{"v", MethodAvg}}, Limit: 1,
+			TimeRange: &TimeRange{Start: int64(0)}})
 		_, _ = f.RevealSecrets(bg, "t", nil)
 		_, _ = f.VerifySecret(bg, "t", "c", "x", nil)
 		for _, p := range f.own.allPublishes() {
@@ -749,6 +750,49 @@ func TestPublishToTableSendsNonFiniteFloatsOfRowsAndStructsAlike(t *testing.T) {
 		}
 		if !reflect.DeepEqual(fromRow.Kwargs, fromStruct.Kwargs) || fromRow.Topic != fromStruct.Topic {
 			t.Errorf("%v: %#v and %#v", x, fromRow, fromStruct)
+		}
+	}
+}
+
+// fleetdb refuses a row it cannot store — a row without tsp, above all — with
+// a plain JavaScript Error on an append, which reaches the caller as
+// wamp.error.runtime_error without a reason (args [{}]): the error says what
+// to check.
+func TestAppendRefusedWithoutAReasonHintsAtTsp(t *testing.T) {
+	f := flock(t)
+	for _, args := range [][]any{{map[string]any{}}, {}, nil} {
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URIRuntimeError, args...) }
+		detail := ""
+		if len(args) > 0 {
+			detail = " — [{}]"
+		}
+		_, err := f.AppendToTable(bg, "sensordata", Row{"temperature": 23})
+		want := "Append to table 'sensordata' failed with WAMP error 'wamp.error.runtime_error'" + detail +
+			": the data backend refused the row without a reason — a missing tsp is the usual cause; see the error-logs table"
+		if err == nil || err.Error() != want {
+			t.Errorf("args %#v: %v\nwant %s", args, err, want)
+		}
+		if WampURI(err) != wamp.URIRuntimeError {
+			t.Errorf("the WAMP error is not reachable: %v", err)
+		}
+		_, err = f.AppendRowsToTable(bg, "sensordata", []Row{{"temperature": 1}, {"temperature": 2}})
+		want = "Bulk append of 2 row(s) to table 'sensordata' failed with WAMP error 'wamp.error.runtime_error'" + detail +
+			": the data backend refused the rows without a reason — a row without tsp is the usual cause; see the error-logs table"
+		if err == nil || err.Error() != want {
+			t.Errorf("bulk, args %#v: %v\nwant %s", args, err, want)
+		}
+	}
+	// Refusals that give a reason, or another URI, are shown as they are.
+	for _, werr := range []*WampError{
+		wampErr(wamp.URIRuntimeError, "boom"),
+		wampErr(wamp.URIRuntimeError, map[string]any{"name": "error", "code": "23505"}),
+		{URI: wamp.URIRuntimeError, Kwargs: map[string]any{"why": "x"}},
+		wampErr("sys.dataservice.error.storage_full", map[string]any{}),
+	} {
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, werr }
+		_, err := f.AppendToTable(bg, "sensordata", Row{"tsp": "2026-01-01T00:00:00Z"})
+		if err == nil || strings.Contains(err.Error(), "tsp") {
+			t.Errorf("%#v: %v", werr, err)
 		}
 	}
 }

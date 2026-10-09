@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	ironflock "github.com/RecordEvolution/ironflock-go"
 	"github.com/RecordEvolution/ironflock-go/filestore"
@@ -31,7 +32,8 @@ func main() {
 		} else if err != nil {
 			return err
 		}
-		if err := ifl.PublishToTable(ctx, "inspections", ironflock.Row{"part_id": "1", "report_url": info.URL}); err != nil {
+		row := ironflock.Row{"tsp": time.Now(), "part_id": "1", "report_url": info.URL}
+		if err := ifl.PublishToTable(ctx, "inspections", row); err != nil {
 			return err
 		}
 

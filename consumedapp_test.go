@@ -664,18 +664,37 @@ func TestDenialRacingStopKeepsItsCode(t *testing.T) {
 }
 
 // Stop with an expired context still closes a consumed connection whose
-// open completes at the same time: the open publishes its outcome under the
-// lock Stop takes its snapshot under, so either the snapshot holds the
-// published handle, which Stop closes, or the open sees Stop and closes it.
-func TestStopWithAnExpiredContextClosesAnOpenCompletingMeanwhile(t *testing.T) {
+// open completes at the same time. A completing open decides under the lock
+// Stop takes its snapshot of the cache under: either it finds Stop begun and
+// closes the connection itself, or it publishes its handle before the
+// snapshot, which Stop then closes even with an expired context. The seam
+// lets a Stop arrive between the open's check and its publication: an open
+// that checked, released the lock and then published would hand out a
+// connection that nobody closes.
+func TestStopWithAnExpiredContextClosesAnOpenPublishingMeanwhile(t *testing.T) {
 	checkGoroutines(t)
 	c := newConsumer(t)
 	expired, cancel := context.WithCancel(bg)
 	cancel()
 	stopped := make(chan struct{})
-	c.afterOpenSettled = func() {
-		_ = c.Stop(expired)
-		close(stopped)
+	var once sync.Once
+	c.beforeOpenPublished = func() {
+		once.Do(func() {
+			if c.IronFlock.mu.TryLock() {
+				c.IronFlock.mu.Unlock()
+				t.Error("the open publishes its outcome without the lock Stop takes its snapshot under")
+			}
+			// Stop must not be able to finish before the publication. It
+			// cannot call Stop itself: the open holds the lock Stop needs.
+			go func() {
+				_ = c.Stop(expired)
+				close(stopped)
+			}()
+			select {
+			case <-stopped:
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
 	}
 	app, err := c.ConnectToApp(bg, "weatherstation")
 	if app == nil && !errors.Is(err, wamp.ErrStopped) {
@@ -689,6 +708,30 @@ func TestStopWithAnExpiredContextClosesAnOpenCompletingMeanwhile(t *testing.T) {
 	_ = c.Stop(bg)
 	if conn.stopCount() != 1 {
 		t.Errorf("stopped %d times", conn.stopCount())
+	}
+}
+
+// A successful open holds the lock Stop takes its snapshot of the cache under
+// until its outcome is published: released any earlier, a Stop in between
+// would miss the connection, which then outlives it (the race the test above
+// sets up). Nothing else contends for the lock here, so a release before the
+// publication is caught every time.
+func TestOpenPublishesItsOutcomeUnderTheLock(t *testing.T) {
+	checkGoroutines(t)
+	c := newConsumer(t)
+	var checked atomic.Bool
+	c.afterOpenPublished = func() {
+		checked.Store(true)
+		if c.IronFlock.mu.TryLock() {
+			c.IronFlock.mu.Unlock()
+			t.Error("the open released the lock before it published its outcome")
+		}
+	}
+	if _, err := c.ConnectToApp(bg, "weatherstation"); err != nil {
+		t.Fatal(err)
+	}
+	if !checked.Load() {
+		t.Fatal("the open did not reach afterOpenPublished")
 	}
 }
 
@@ -783,6 +826,7 @@ func TestFatalAuthDenialWhileOpening(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newConsumer(t)
+			injectPerAppCredential(t)
 			c.factory.setSetup(setup)
 			var onError atomic.Int32
 			_, err := c.ConnectToApp(bg, "weatherstation", ConnectToAppOptions{
@@ -809,6 +853,7 @@ func TestFatalAuthDenialWhileOpening(t *testing.T) {
 func TestGrantRevokedAfterConnecting(t *testing.T) {
 	checkGoroutines(t)
 	c := newConsumer(t)
+	injectPerAppCredential(t)
 	errs := make(chan *CrossAppAccessError, 2)
 	first, err := c.ConnectToApp(bg, "weatherstation", ConnectToAppOptions{
 		OnError: func(err *CrossAppAccessError) { errs <- err },
@@ -854,6 +899,58 @@ func TestGrantRevokedAfterConnecting(t *testing.T) {
 	}
 }
 
+// injectPerAppCredential writes the per-app credential the device agent
+// injects into the test's /data/env (see setIdentityEnv).
+func injectPerAppCredential(t *testing.T) {
+	t.Helper()
+	writeEnvFiles(t, map[string]string{"APP_AUTH_ID": "app-20-dev-e1@test-serial-123", "APP_AUTH_SECRET": "per-app-secret"})
+}
+
+// Cross-app access needs the per-app credential the device agent injects.
+// Without one (an older agent, say) the app presents its legacy device
+// credential, which the platform refuses on another app's realm: the denial
+// says so instead of suggesting a revoked grant, which exists.
+func TestDenialWithTheLegacyCredentialNamesThePerAppCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		opts   []Option
+		files  bool
+		legacy bool
+	}{
+		{"legacy credential", nil, false, true},
+		{"injected per-app credential", nil, true, false},
+		{"explicit credential", []Option{WithCredentials("app-20-dev-e1@test-serial-123", "secret")}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setIdentityEnv(t)
+			if tc.files {
+				injectPerAppCredential(t)
+			}
+			c := consumerOf(t, newTestFlock(t, tc.opts...))
+			c.factory.setSetup(denyAuth(0, wamp.URIAuthenticationFailed))
+			_, err := c.ConnectToApp(bg, "weatherstation")
+			cerr := asCrossAppError(t, err, CodeNotAuthorized)
+			const prefix = "Access to app 'weatherstation' (dev) denied: wamp.error.authentication_failed. "
+			if !strings.HasPrefix(cerr.Message, prefix) {
+				t.Fatalf("message %q", cerr.Message)
+			}
+			why := strings.TrimPrefix(cerr.Message, prefix)
+			if tc.legacy {
+				for _, part := range []string{"per-app credential the device agent injects", "APP_AUTH_ID", "legacy"} {
+					if !strings.Contains(why, part) {
+						t.Errorf("%q does not mention %q", why, part)
+					}
+				}
+				if strings.Contains(why, "revoked") {
+					t.Errorf("%q blames the grant", why)
+				}
+			} else if why != "The grant may have been revoked." {
+				t.Errorf("message %q", cerr.Message)
+			}
+		})
+	}
+}
+
 func TestOnErrorPanicsAreRecovered(t *testing.T) {
 	c := newConsumer(t)
 	if _, err := c.ConnectToApp(bg, "weatherstation", ConnectToAppOptions{
@@ -886,7 +983,7 @@ func TestConsumedAppGetHistory(t *testing.T) {
 		Args:      []any{map[string]any{"limit": int64(100), "offset": int64(0)}},
 		Window:    5 * time.Second, // the consumer's reconnect window
 	}
-	if got := conn.lastCall(t); !reflect.DeepEqual(got, want) {
+	if got := readCall(t, conn.lastCall(t)); !reflect.DeepEqual(got, want) {
 		t.Errorf("call %#v\nwant %#v", got, want)
 	}
 
@@ -942,7 +1039,8 @@ func TestConsumedAppCatalogGuard(t *testing.T) {
 	}
 	_, err = app.SubscribeToTable(bg, "secret", func(*Event) {})
 	assertCrossAppError(t, err, CodePrivateTable)
-	_, err = app.GetSeriesHistory(bg, "secret", SeriesQueryParams{Metrics: []string{"temp"}, Method: MethodAvg, Limit: 10, TimeRange: &TimeRange{}})
+	_, err = app.GetSeriesHistory(bg, "secret", SeriesQueryParams{Metrics: []SeriesMetric{{"temp", MethodAvg}}, Limit: 10,
+		TimeRange: &TimeRange{Start: int64(0)}})
 	cerr = asCrossAppError(t, err, CodePrivateTable)
 	if want := "'secret' is not a shared table of app 'weatherstation' (dev). Available tables: readings"; cerr.Message != want {
 		t.Errorf("series message %q", cerr.Message)
@@ -1025,19 +1123,27 @@ func TestConsumedAppGetSeriesHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := c.factory.all()[0]
-	q := SeriesQueryParams{Metrics: []string{"temperature"}, Method: MethodAvg, Limit: 100, TimeRange: &TimeRange{Start: "2026-01-01T00:00:00.000Z"}}
+	q := SeriesQueryParams{
+		Metrics: []SeriesMetric{{"temperature", MethodAvg}}, Limit: 100,
+		TimeRange: &TimeRange{Start: "2026-01-01T00:00:00.000Z"},
+		FilterAnd: []Filter{Or(Where("temperature", ">", 30), IsNull("temperature"))},
+	}
 	if _, err := app.GetSeriesHistory(bg, "readings", q); err != nil {
 		t.Fatal(err)
 	}
 	want := fakeCall{
 		Procedure: "history.transformed.series.readings",
 		Args: []any{map[string]any{
-			"metrics": []any{"temperature"}, "method": "AVG", "limit": int64(100),
+			"metrics": []any{map[string]any{"ref": "temperature", "method": "AVG"}}, "limit": int64(100),
 			"timeRange": []any{"2026-01-01T00:00:00.000Z", nil},
+			"filterAnd": []any{map[string]any{"combinator": "OR", "filters": []any{
+				map[string]any{"column": "temperature", "operator": ">", "value": int64(30)},
+				map[string]any{"column": "temperature", "operator": "IS NULL"},
+			}}},
 		}},
 		Window: DefaultReconnectWindow,
 	}
-	if got := conn.lastCall(t); !reflect.DeepEqual(got, want) {
+	if got := readCall(t, conn.lastCall(t)); !reflect.DeepEqual(got, want) {
 		t.Errorf("call %#v\nwant %#v", got, want)
 	}
 
@@ -1047,7 +1153,7 @@ func TestConsumedAppGetSeriesHistory(t *testing.T) {
 		t.Errorf("message %q", cerr.Message)
 	}
 	bad := q
-	bad.Method = "MEAN"
+	bad.Metrics = []SeriesMetric{{"temperature", "MEAN"}}
 	if _, err := app.GetSeriesHistory(bg, "readings", bad); !errors.Is(err, ErrInvalidArgument) ||
 		!strings.Contains(err.Error(), "Invalid series query parameters") {
 		t.Errorf("invalid method: %v", err)
@@ -1072,7 +1178,7 @@ func TestConsumedAppMapsProviderRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := c.factory.all()[0]
-	series := SeriesQueryParams{Metrics: []string{"temp"}, Method: MethodAvg, Limit: 10, TimeRange: &TimeRange{}}
+	series := SeriesQueryParams{Metrics: []SeriesMetric{{"temp", MethodAvg}}, Limit: 10, TimeRange: &TimeRange{Start: int64(0)}}
 
 	fail(conn, wampErr("wamp.error.not_authorized"))
 	_, err = app.GetHistory(bg, "readings", nil)

@@ -74,11 +74,13 @@ type OperationError struct {
 	Err error
 	// hint replaces the generic cause in the message when set.
 	hint string
+	// note follows the message when set.
+	note string
 }
 
 // Error implements error:
 //
-//	<Op> failed with WAMP error '<uri>'[ — <json args>]
+//	<Op> failed with WAMP error '<uri>'[ — <json args>][: <note>]
 //	<Op> failed: <hint or cause>
 //
 // The args are compact JSON as JavaScript's JSON.stringify writes it,
@@ -88,15 +90,21 @@ func (e *OperationError) Error() string {
 	if e.hint != "" {
 		return fmt.Sprintf("%s failed: %s", e.Op, e.hint)
 	}
+	var msg string
 	var werr *wamp.Error
 	if errors.As(e.Err, &werr) {
 		detail := ""
 		if len(werr.Args) > 0 {
 			detail = " — " + jsontext.Compact(werr.Args)
 		}
-		return fmt.Sprintf("%s failed with WAMP error '%s'%s", e.Op, werr.URI, detail)
+		msg = fmt.Sprintf("%s failed with WAMP error '%s'%s", e.Op, werr.URI, detail)
+	} else {
+		msg = fmt.Sprintf("%s failed: %v", e.Op, e.Err)
 	}
-	return fmt.Sprintf("%s failed: %v", e.Op, e.Err)
+	if e.note != "" {
+		msg += ": " + e.note
+	}
+	return msg
 }
 
 // Unwrap returns the cause.
@@ -111,6 +119,73 @@ func WampURI(err error) string {
 	}
 	return ""
 }
+
+// Refusals of the data backend (fleetdb). An operation it refuses fails with
+// an *OperationError around a *WampError carrying one of these URIs (and the
+// reason as its first argument): branch on WampURI(err). The SDK retries
+// none of them.
+const (
+	// URIRateLimited: RevealSecrets beyond 30, or VerifySecret beyond 120,
+	// calls a minute, counted per app credential on a device (and per data
+	// backend process) in a fixed one-minute window. Reveal a secret once
+	// and keep it rather than on every use; cache the outcome of a
+	// per-request VerifySecret briefly.
+	URIRateLimited = "sys.dataservice.error.rate_limited"
+	// URIResultTooLarge: a read whose result cannot be transported: a single
+	// row over the data backend's 8 MiB message budget, or a result over its
+	// runaway guard (1 GiB). (Larger results arrive in chunks, which the
+	// read methods reassemble.) Its Kwargs carry bytes, rows, limitBytes and
+	// topColumns: lower Limit, narrow TimeRange, select fewer Columns, or
+	// prune json columns with ColumnPaths.
+	URIResultTooLarge = "sys.dataservice.error.result_too_large"
+	// URIInvalidLimit: a read of a transform with a Limit over 3000.
+	URIInvalidLimit = "sys.dataservice.error.invalid_limit"
+	// URIInvalidTimeRange: a series query whose time range has no start, or
+	// an end that is not after its start.
+	URIInvalidTimeRange = "sys.dataservice.error.invalid_time_range"
+	// URIInvalidMetric: a series metric the table cannot aggregate: a ref
+	// that is no column of the table (or a path into a column that is not
+	// json), a secret column, a method the column's type does not take, tsp
+	// with another method than COUNT, or a column name over 63 bytes.
+	URIInvalidMetric = "sys.dataservice.error.invalid_metric"
+	// URIInvalidGroupBy: a series GroupBy column the table cannot group by:
+	// no column of the table, a secret column, tsp, a column that is also a
+	// metric, or a name over 63 bytes.
+	URIInvalidGroupBy = "sys.dataservice.error.invalid_group_by"
+	// URISeriesTooManyGroups: a series result over 50,000 rows (buckets times
+	// groups): fewer buckets, a narrower time range, or a GroupBy of fewer
+	// distinct values.
+	URISeriesTooManyGroups = "sys.dataservice.error.series_too_many_groups"
+	// URISecretColumn: a read (GetHistory, GetSeriesHistory, RevealSecrets,
+	// VerifySecret) that filters on a secret column, whose stored values no
+	// predicate can match. Use VerifySecret to test a value.
+	URISecretColumn = "sys.dataservice.error.secret_column"
+	// URINotASecretColumn: VerifySecret with a column that is not a secret
+	// column, or RevealSecrets of a table that has no secret column.
+	URINotASecretColumn = "sys.dataservice.error.not_a_secret_column"
+	// URIStorageFull: an append refused because the appliance's disk is
+	// nearly full (below about 3 GiB free; writes are accepted again from
+	// 4 GiB). Temporary, nothing stored is lost: hold the rows and append
+	// them later. A published row refused for this is dropped without a
+	// word to the publisher; only appends report it.
+	URIStorageFull = "sys.dataservice.error.storage_full"
+	// URIStorageOverusage: an append refused because the account's storage
+	// allowance is used up; retrying soon does not help. Published rows are
+	// dropped likewise without a word.
+	URIStorageOverusage = "sys.dataservice.error.storage_overusage"
+	// URIEntityKeyConflict: a write of a row whose entity key
+	// (maintainLatestFlagFor) and tsp another row has already — in the same
+	// batch (one stamped with one tsp, say) or stored before. Give every row
+	// its own tsp.
+	URIEntityKeyConflict = "sys.dataservice.error.entity_key_conflict"
+	// URISecretSentinelUnresolvable: a write that keeps a secret column's
+	// previous value (it sends SecretPlaceholder) to a table without an entity
+	// key to find that value by, or without that key in the row.
+	URISecretSentinelUnresolvable = "sys.dataservice.error.secret_sentinel_unresolvable"
+	// URISecretCiphertextRejected: a write of a value that is already
+	// encrypted (read back raw, say) to a secret column: send the plaintext.
+	URISecretCiphertextRejected = "sys.dataservice.error.secret_ciphertext_rejected"
+)
 
 // operationFailed wraps err for operation op, leaving client-side errors
 // (invalid argument, missing configuration) and cross-app errors as they are.

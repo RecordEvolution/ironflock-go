@@ -63,9 +63,18 @@ type ConnectToAppOptions struct {
 	// this app's own stage, IronFlock.Stage().Lower()).
 	Stage string
 	// OnError is called (on its own goroutine) when the connection is
-	// fatally denied AFTER ConnectToApp returned — e.g. the grant was
-	// revoked and the next reconnect was refused. Before that, the same
-	// condition is returned by ConnectToApp.
+	// denied for good AFTER ConnectToApp returned — e.g. the grant was
+	// revoked, and the reconnects are refused. A refusal counts as for good
+	// only once it persists: 3 refusals or more since the connection was
+	// last up — the router closing the session for an auth reason counts as
+	// one, as does each refused reconnect — the first one at least 60s ago
+	// (see wamp.Config.FailOnAuthError), because the platform refuses the
+	// same way while it cannot verify access for a moment;
+	// until then the connection keeps reconnecting, and the handle recovers
+	// if a reconnect succeeds. The handle is then evicted (the next
+	// ConnectToApp opens a fresh connection) and its connection released.
+	// Before ConnectToApp returned, a denial is returned by ConnectToApp at
+	// once.
 	//
 	// OnError is bound to the cached handle when it is created: a call that
 	// returns an existing handle, or shares an open already in flight, does
@@ -81,7 +90,8 @@ type ConnectToAllAppsOptions struct {
 	Stage string
 	// OnError is called with the failure of each provider that could not be
 	// opened (unless StopOnError is set), and with a *CrossAppAccessError
-	// when an opened provider connection is later fatally denied.
+	// when an opened provider connection is later denied for good (when a
+	// denial counts as for good: see ConnectToAppOptions.OnError).
 	//
 	// Open failures are reported on the calling goroutine, in the order of
 	// the provider list, before ConnectToAllApps returns. Like
@@ -121,7 +131,8 @@ func (e *consumedEntry) wait(ctx context.Context) (*ConsumedApp, error) {
 
 // ConsumedApp is a read-only handle on another app's data backend, in the
 // same project and fleet. It wraps a dedicated connection to the provider's
-// realm, where the router allows only reading shared tables and transforms.
+// realm, where the router allows the per-app credential only reading shared
+// tables and transforms (see ConnectToApp for the legacy credential).
 type ConsumedApp struct {
 	// App is the provider app's name.
 	App string
@@ -273,11 +284,15 @@ func callFailed(op string, err error) error {
 }
 
 // GetHistory reads rows of a shared table or transform (the provider's
-// history.transformed.<table>). A nil q reads the 10 most recent rows.
+// history.transformed.<table>) as IronFlock.GetHistory does — a large result
+// reassembled from chunks, a transform with the semantics TableQueryParams
+// describes (Limit at most 3000; TimeRange, Columns, ColumnPaths and the
+// Latest marker ignored). A nil q reads the 10 newest rows of a table.
 //
 // Errors: *CrossAppAccessError with PRIVATE_TABLE for a name outside the
 // shared catalog, SECRET_COLUMN when q filters on or selects a column the
-// provider marks secret, NOT_AUTHORIZED when the provider denies access.
+// provider marks secret, NOT_AUTHORIZED when the provider denies access; the
+// data backend's refusals as for IronFlock.GetHistory.
 func (a *ConsumedApp) GetHistory(ctx context.Context, table string, q *TableQueryParams) ([]Row, error) {
 	if err := a.assertInCatalog(table); err != nil {
 		return nil, err
@@ -293,15 +308,17 @@ func (a *ConsumedApp) GetHistory(ctx context.Context, table string, q *TableQuer
 		return nil, err
 	}
 	op := fmt.Sprintf("getHistory('%s') on app '%s' (%s)", table, a.App, a.Stage)
-	res, err := a.conn.Call(ctx, "history.transformed."+table, []any{wire}, nil, nil, a.reconnectWindow)
+	read := new(chunkedRead)
+	res, err := a.conn.Call(ctx, "history.transformed."+table, []any{wire}, nil, read.options(), a.reconnectWindow)
 	if err != nil {
 		return nil, callFailed(op, err)
 	}
-	return decodeRows(op, res)
+	return read.rows(op, res)
 }
 
 // GetSeriesHistory reads down-sampled series of a shared table (tables
-// only: there is no series procedure for transforms).
+// only: there is no series procedure for transforms), with the query and
+// the rows of IronFlock.GetSeriesHistory.
 func (a *ConsumedApp) GetSeriesHistory(ctx context.Context, table string, q SeriesQueryParams) ([]Row, error) {
 	if strings.TrimSpace(table) == "" {
 		return nil, invalidf("Tablename must not be empty!")
@@ -327,15 +344,17 @@ func (a *ConsumedApp) GetSeriesHistory(ctx context.Context, table string, q Seri
 		return nil, invalidParams("series query", err)
 	}
 	op := fmt.Sprintf("getSeriesHistory('%s') on app '%s' (%s)", table, a.App, a.Stage)
-	res, err := a.conn.Call(ctx, "history.transformed.series."+table, []any{wire}, nil, nil, a.reconnectWindow)
+	read := new(chunkedRead)
+	res, err := a.conn.Call(ctx, "history.transformed.series."+table, []any{wire}, nil, read.options(), a.reconnectWindow)
 	if err != nil {
 		return nil, callFailed(op, err)
 	}
-	return decodeRows(op, res)
+	return read.rows(op, res)
 }
 
 // SubscribeToTable subscribes handler to realtime rows of a shared table or
-// transform, exactly like IronFlock.SubscribeToTable.
+// transform, exactly like IronFlock.SubscribeToTable — a transform's events
+// carry the whole view (see Event.Rows).
 func (a *ConsumedApp) SubscribeToTable(ctx context.Context, table string, handler EventHandler, opts ...SubscribeOptions) (*TableSubscription, error) {
 	if err := a.assertInCatalog(table); err != nil {
 		return nil, err
@@ -387,6 +406,13 @@ func (f *IronFlock) consumedStage(stage string) (string, error) {
 // consumes: [{app: "*"}]), and the project user must have granted access.
 // Handles are cached per app and stage: a second call returns the same
 // handle, and concurrent calls share one attempt.
+//
+// The connection needs the per-app credential the device agent injects
+// (APP_AUTH_ID and APP_AUTH_SECRET), or one passed with WithCredentials. With
+// the legacy device credential (the serial-number fallback, e.g. under an
+// older agent) the platform refuses the provider's realm (NOT_AUTHORIZED,
+// whose message then says so) — or, when the provider app runs on this same
+// device, admits it with that app's own full rights rather than read-only.
 //
 // Errors: *CrossAppAccessError with NO_GRANT, PROVIDER_NOT_INSTALLED,
 // UNKNOWN_APP or NOT_AUTHORIZED.
@@ -574,12 +600,15 @@ func (f *IronFlock) runOpen(e *consumedEntry, app, stage string, evict func(), o
 		// the connection, or this attempt finds Stop and closes it itself.
 		f.mu.Lock()
 		if !f.stopped {
-			e.app = a
-			close(e.done) // waiters do not take f.mu
-			f.mu.Unlock()
-			if h := f.afterOpenSettled; h != nil {
+			if h := f.beforeOpenPublished; h != nil {
 				h()
 			}
+			e.app = a
+			close(e.done) // waiters do not take f.mu
+			if h := f.afterOpenPublished; h != nil {
+				h()
+			}
+			f.mu.Unlock()
 			return
 		}
 		f.mu.Unlock()
@@ -646,11 +675,12 @@ func (f *IronFlock) openConsumedApp(ctx context.Context, appName, stage string, 
 // info: realm-<SWARM_KEY>-<provider_app_key>-<stage>, with this app's own
 // credential (the platform checks the grant against the connecting app).
 //
-// The connection fails on an authentication or authorization denial instead
-// of retrying. A denial while opening is returned as NOT_AUTHORIZED; a
-// denial after the open (grant revoked, reconnect refused) evicts the handle,
-// releases its connection and is reported to onDenied. The connection is
-// always torn down when the open fails.
+// The connection treats an authentication or authorization denial as final
+// (wamp.Config.FailOnAuthError). A denial while opening fails the open at once
+// and is returned as NOT_AUTHORIZED. After the open a denial counts only once
+// it persists (the router also refuses while it cannot verify access); then
+// the handle is evicted, its connection released, and the denial reported to
+// onDenied. The connection is always torn down when the open fails.
 func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, stage string, evict func(), onDenied func(*CrossAppAccessError)) (*ConsumedApp, error) {
 	catalog := info.Catalog(stage)
 	if catalog == nil {
@@ -680,11 +710,14 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 	realm := wamp.RealmName(f.swarmKey, info.ProviderAppKey, appStage)
 	op := fmt.Sprintf("Connection to app '%s' (%s)", info.App, stage)
 	denial := func(reason string, cause error) *CrossAppAccessError {
+		why := "The grant may have been revoked."
+		if f.usesLegacyCredential() {
+			why = legacyCredentialDenial
+		}
 		return &CrossAppAccessError{
-			Code: CodeNotAuthorized,
-			Message: fmt.Sprintf("Access to app '%s' (%s) denied: %s. The grant may have been revoked.",
-				info.App, stage, reason),
-			Err: cause,
+			Code:    CodeNotAuthorized,
+			Message: fmt.Sprintf("Access to app '%s' (%s) denied: %s. %s", info.App, stage, reason, why),
+			Err:     cause,
 		}
 	}
 
@@ -773,6 +806,23 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		log:             f.log,
 		cleanupTimeout:  f.cleanupTimeout,
 	}, nil
+}
+
+// legacyCredentialDenial explains a cross-app denial of a connection that
+// presented the legacy device credential.
+const legacyCredentialDenial = "Cross-app access needs the per-app credential the device agent injects " +
+	"(APP_AUTH_ID and APP_AUTH_SECRET); this app has none (an older device agent does not inject it), so it " +
+	"presented the legacy device credential, which another app's realm does not admit."
+
+// usesLegacyCredential reports whether the app's connections present the
+// legacy device credential (serial, serial): no WithCredentials pair and no
+// per-app credential injected.
+func (f *IronFlock) usesLegacyCredential() bool {
+	if f.authID != "" {
+		return false
+	}
+	id, secret := wamp.AppCredentials(f.serialNumber)
+	return id == f.serialNumber && secret == f.serialNumber
 }
 
 // safeCallback runs a user callback, recovering and logging a panic.

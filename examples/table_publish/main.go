@@ -26,8 +26,10 @@ func main() {
 		log.Fatal(err)
 	}
 	err = ifl.Run(context.Background(), func(ctx context.Context) error {
-		// One row, as a map ...
-		if err := ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5, "humidity": 60}); err != nil {
+		// One row, as a map ... Every row carries tsp, the table's mandatory
+		// timestamp column: the data backend drops a published row without it.
+		row := ironflock.Row{"tsp": time.Now(), "temperature": 22.5, "humidity": 60.0}
+		if err := ifl.PublishToTable(ctx, "sensordata", row); err != nil {
 			return err
 		}
 
@@ -50,8 +52,8 @@ func main() {
 			return err
 		}
 
-		// Append waits for the insert outcome.
-		res, err := ifl.AppendToTable(ctx, "sensordata", ironflock.Row{"temperature": 23.1, "humidity": 61})
+		// Append waits for the insert outcome, and reports a refused row.
+		res, err := ifl.AppendToTable(ctx, "sensordata", ironflock.Row{"tsp": time.Now(), "temperature": 23.1, "humidity": 61.0})
 		if err != nil {
 			return err
 		}
