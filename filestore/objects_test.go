@@ -89,6 +89,12 @@ func TestURL(t *testing.T) {
 		{"escapes but keeps folder separators", "a/b c.jpg", []Option{Namespace("frames")},
 			"https://files.ironflock.com/f/3317/frames/a/b%20c.jpg"},
 		{"default namespace", "a.jpg", nil, "https://files.ironflock.com/f/3317/default/a.jpg"},
+		// The file service takes "" for the default namespace in every call;
+		// the edge has no empty namespace segment.
+		{"explicit empty namespace is the default", "a.jpg", []Option{Namespace("")},
+			"https://files.ironflock.com/f/3317/default/a.jpg"},
+		{"explicit empty namespace, folder key", "frames/cam1.jpg", []Option{Namespace("")},
+			"https://files.ironflock.com/f/3317/default/frames/cam1.jpg"},
 		{"unreserved kept", "AZaz09-._~/x", nil, "https://files.ironflock.com/f/3317/default/AZaz09-._~/x"},
 		{"reserved and sub-delims escaped", "a+b&c=d?e#f%g!*'()$,;:@", nil,
 			"https://files.ironflock.com/f/3317/default/a%2Bb%26c%3Dd%3Fe%23f%25g%21%2A%27%28%29%24%2C%3B%3A%40"},
@@ -112,6 +118,41 @@ func TestURL(t *testing.T) {
 	}
 	if n := fc.count(URINamespaces); n != 1 {
 		t.Errorf("catalog fetched %d times, want 1 (URL is offline after that)", n)
+	}
+}
+
+// A namespace given as "" is the default namespace everywhere: the file
+// service maps it so for every call (fleetfiles handlers.go wrap), so the
+// URL an ObjectInfo carries and the one URL composes for the same option
+// must agree — a "//" segment would make the edge answer 404, or address
+// the wrong object for a folder-style key ("/f/3317//frames/cam1.jpg" is
+// cleaned to namespace "frames", key "cam1.jpg").
+func TestEmptyNamespaceURLsAgree(t *testing.T) {
+	ctx := context.Background()
+	fs, fc := newStore(t, map[string]any{URIStat: replyFunc(func(args []any) (any, error) {
+		a := args[0].(map[string]any)
+		ns := a["namespace"].(string)
+		if ns == "" {
+			ns = "default"
+		}
+		return ok(map[string]any{"namespace": ns, "key": a["key"], "size": int64(1)}), nil
+	})})
+	for _, key := range []string{"top.txt", "frames/cam1.jpg"} {
+		info, err := fs.Stat(ctx, key, Namespace(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := fs.URL(ctx, key, Namespace(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u != info.URL || !strings.Contains(u, "/f/3317/default/") {
+			t.Errorf("%s: URL = %q, Stat's URL = %q; want both in the default namespace", key, u, info.URL)
+		}
+	}
+	// The call itself still sends the namespace as given.
+	if got := listArg(t, fc.callsTo(URIStat)[0], "namespace"); got != "" {
+		t.Errorf("stat sent namespace %q, want \"\"", got)
 	}
 }
 
@@ -140,6 +181,9 @@ func TestURLBases(t *testing.T) {
 		c, _ := fs.CloudURL(ctx, "a/b c.jpg", Namespace("frames"), Version("e 1"))
 		if c != "https://i5-files.app.ironflock.com/f/3317/frames/a/b%20c.jpg?v=e%201" {
 			t.Errorf("CloudURL = %q", c)
+		}
+		if c, _ := fs.CloudURL(ctx, "a.jpg", Namespace("")); c != "https://i5-files.app.ironflock.com/f/3317/default/a.jpg" {
+			t.Errorf("CloudURL with the explicit empty namespace = %q", c)
 		}
 		if u, _ := fs.URL(ctx, "a.jpg", Namespace("frames")); u != "https://files.ironflock.com/f/3317/frames/a.jpg" {
 			t.Errorf("the public base changed: URL = %q", u)
@@ -248,7 +292,7 @@ func TestIterStopsWhenTheCursorRunsOut(t *testing.T) {
 		page(true, "", "b"),
 		page(true, "c3", "never"),
 	)})
-	keys, err := collectKeys(t, fs, ctx, Namespace("frames"), Prefix("p/"), Limit(50), Cursor("ignored"))
+	keys, err := collectKeys(t, fs, ctx, Namespace("frames"), Prefix("p"), Limit(50), Cursor("ignored"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +304,7 @@ func TestIterStopsWhenTheCursorRunsOut(t *testing.T) {
 		t.Fatalf("list called %d times, want 2", len(calls))
 	}
 	for i, wantCursor := range []string{"", "c1"} {
-		want := map[string]any{"namespace": "frames", "prefix": "p/", "limit": int64(50), "cursor": wantCursor}
+		want := map[string]any{"namespace": "frames", "prefix": "p", "limit": int64(50), "cursor": wantCursor, "delimiter": ""}
 		if !reflect.DeepEqual(calls[i].Args, []any{want}) {
 			t.Errorf("page %d args = %v, want [%v]", i, calls[i].Args, want)
 		}

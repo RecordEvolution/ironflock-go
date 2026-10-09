@@ -10,10 +10,15 @@ import (
 //	<base without trailing "/">/f/<sad key>/<namespace>/<escaped key>[?v=<escaped version>]
 //
 // It returns "" when base is empty (no HTTP edge, or no cloud tunnel). The
-// namespace is not escaped (namespace names are URL-safe by construction).
+// namespace is not escaped (namespace names are URL-safe by construction),
+// and "" is DefaultNamespace, as the file service takes it in every call: the
+// edge knows no empty namespace segment.
 func objectURL(base string, sadKey int64, namespace, key, version string) string {
 	if base == "" {
 		return ""
+	}
+	if namespace == "" {
+		namespace = DefaultNamespace
 	}
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(base, "/"))

@@ -566,7 +566,7 @@ func TestStagingFileName(t *testing.T) {
 		{strings.Repeat("a", 197) + "🙂🙂", strings.Repeat("a", 197)},
 	}
 	for _, tc := range cases {
-		f, err := createTemp(dir, tc.base)
+		f, err := createTemp(dir, tc.base, 0o666)
 		if err != nil {
 			t.Fatalf("%d-byte base: %v", len(tc.base), err)
 		}

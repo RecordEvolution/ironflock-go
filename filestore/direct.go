@@ -344,6 +344,10 @@ func readExactly(r io.Reader, size int64) ([]byte, error) {
 // be replaced.
 var renameFile = os.Rename
 
+// openStaging is os.OpenFile, as createTemp opens a staging file; tests
+// replace it to observe the file.
+var openStaging = os.OpenFile
+
 // maxLinks bounds the chain of symbolic links resolveLink follows, as
 // filepath.EvalSymlinks bounds it.
 const maxLinks = 255
@@ -355,17 +359,14 @@ const stagingBaseMax = 200
 
 // writeFileAtomic writes the file at path through fill, as
 // FileStore.GetToFile describes: the parent directories of path are
-// created, and path is reached as open(2) reaches it, following symbolic
-// links. A regular file, or one that does not exist yet, is staged and
-// renamed into place by replaceFile, so a failing fill leaves it as it was.
-// Anything else (a FIFO, a device) cannot be replaced by a rename and is
-// written in place.
+// created, and path is reached as open(2) reaches it (see prepareTarget),
+// following symbolic links. A regular file, or one that does not exist yet,
+// is staged and renamed into place by replaceFile, so a failing fill leaves
+// it as it was. Anything else (a FIFO, a device) cannot be replaced by a
+// rename and is written in place.
 func writeFileAtomic(path string, fill func(w io.Writer) error) error {
-	abs, err := filepath.Abs(path)
+	abs, err := prepareTarget(path)
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o777); err != nil {
 		return err
 	}
 	fi, err := os.Stat(abs) // follows the links, as open(2) does
@@ -442,14 +443,25 @@ func linkDestination(p, target string) (string, error) {
 
 // replaceFile writes dst through fill to a new staging file in dst's
 // directory, which is synced and renamed over dst only once fill has
-// succeeded. fi describes the existing dst (nil when there is none): its
-// permission bits are kept, and a new file gets 0666 minus the umask.
+// succeeded. fi describes the existing dst (nil when there is none): the
+// staging file is created with dst's owner bits only, gets dst's owner and
+// group as far as the process may (keepOwner), and only then dst's
+// permission bits (which also restores any the umask took). So it is never
+// more permissive than dst, and no group but dst's can open it while the
+// download is written into it. A new file gets 0666 minus the umask.
 //
 // Where dst is a mount point (a single file bind-mounted into a container),
 // rename fails with EBUSY: the complete staging file is then copied into dst
 // instead.
 func replaceFile(dst string, fi os.FileInfo, fill func(w io.Writer) error) (err error) {
-	tmp, err := createTemp(filepath.Dir(dst), filepath.Base(dst))
+	perm, create := os.FileMode(0o666), os.FileMode(0o666)
+	if fi != nil {
+		// Until keepOwner has run the file has the process's group, or the
+		// directory's: dst's group bits must not apply to it yet.
+		perm = fi.Mode().Perm()
+		create = perm & 0o700
+	}
+	tmp, err := createTemp(filepath.Dir(dst), filepath.Base(dst), create)
 	if err != nil {
 		return err
 	}
@@ -460,7 +472,8 @@ func replaceFile(dst string, fi os.FileInfo, fill func(w io.Writer) error) (err 
 		}
 	}()
 	if fi != nil {
-		if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		keepOwner(tmp, fi)
+		if err := tmp.Chmod(perm); err != nil {
 			return err
 		}
 	}
@@ -524,13 +537,14 @@ func writeInPlace(path string, fill func(w io.Writer) error) error {
 
 // createTemp creates a new, hidden staging file in dir for the target name
 // base: "." + base + "." + random + ".tmp", keeping at most stagingBaseMax
-// bytes of base. Unlike os.CreateTemp it creates the file with mode 0666
-// (before the umask), because the file becomes the final download.
-func createTemp(dir, base string) (*os.File, error) {
+// bytes of base. Unlike os.CreateTemp it creates the file with mode perm
+// (before the umask), because the file becomes the final download; the
+// descriptor it returns is writable whatever perm is.
+func createTemp(dir, base string, perm os.FileMode) (*os.File, error) {
 	prefix := "." + truncateBytes(base, stagingBaseMax) + "."
 	for range 100 {
 		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36)+".tmp")
-		f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o666)
+		f, err := openStaging(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
