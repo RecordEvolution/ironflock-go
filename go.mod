@@ -27,4 +27,8 @@ require (
 // fork's client relies on and package wamp's peer wrapper implements. The fork's
 // client also gives up sends to a dead connection, and its WebSocket writes have
 // a deadline. Keep the pinned commit in the README's replace line in step.
+//
+// Go refuses `go install` and `go run` of pkg@version for a module with replace
+// directives, so neither works for this module's examples nor for a program
+// built on the SDK: build them from source (see the README).
 replace github.com/gammazero/nexus/v3 => github.com/RecordEvolution/nexus/v3 v3.0.0-20261001140357-5a989b085bbb

@@ -48,6 +48,11 @@ replace github.com/gammazero/nexus/v3 => github.com/RecordEvolution/nexus/v3 v3.
 
 When you upgrade the SDK, keep the pinned commit in step with the one in this module's `go.mod`.
 
+Because of the `replace`, `go install` and `go run` with a version (`pkg@v1.9.0`, `pkg@latest`) work neither for
+the examples nor for a program built on the SDK: Go refuses them for a module whose `go.mod` has `replace`
+directives. Build from source instead: clone this repository and `go run ./examples/simple_publish`, or
+`go build` / `go install .` inside your own module (in a Dockerfile, copy the module and `go build` it).
+
 ## Usage
 
 ```go
@@ -73,7 +78,8 @@ func main() {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 		for {
-			if err := ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5}); err != nil {
+			row := ironflock.Row{"tsp": time.Now(), "temperature": 22.5}
+			if err := ifl.PublishToTable(ctx, "sensordata", row); err != nil {
 				log.Print(err)
 			}
 			select {
@@ -91,6 +97,9 @@ func main() {
 
 More in [examples/](examples).
 
+Every table has a mandatory `tsp` column, the row's timestamp: give every row you write one (a `time.Time` is
+sent as RFC 3339 in UTC). The data backend drops a published row without it — see `PublishToTable` below.
+
 Every network operation takes a `context.Context` and is safe to call from many goroutines. `Start` (and
 `Run`) block until the app's realm is joined. Operations issued before that — by a goroutine started before
 `Run`, say — wait for `Start` and then for the connection, within the time they wait for a connection anyway
@@ -103,19 +112,28 @@ WAMP messages carry positional arguments and keyword arguments. Methods that sen
 `Kwargs` value among them is sent as keyword arguments, like `sql.Named` in `database/sql`:
 
 ```go
-ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5}) // args [{"temperature": 22.5}]
-ifl.PublishToTable(ctx, "inspections", ironflock.Kwargs{"part_id": "1"})  // kwargs {"part_id": "1"}
-ifl.Call(ctx, "com.example.proc", 1, 2, ironflock.Kwargs{"scale": 10})    // args [1, 2], kwargs {"scale": 10}
+ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"tsp": now, "temperature": 22.5}) // args [{"tsp": "…", "temperature": 22.5}]
+ifl.Call(ctx, "com.example.proc", 1, 2, ironflock.Kwargs{"scale": 10})                // args [1, 2], kwargs {"scale": 10}
 ```
+
+A table write's row is its first positional argument: the data backend reads the columns from there, and from
+the keyword arguments only where the table's data template maps a column to them (`path: kwargs.<key>`).
 
 Values can be maps, slices and scalars, or structs. They are converted by the rules of `encoding/json` —
 struct fields named by their `json` tags, with `omitempty`, `omitzero`, `-`, `,string` and embedded structs,
-and `MarshalJSON`/`MarshalText` methods used — so the platform receives the shape Python and JavaScript apps
-send. Three things differ from `encoding/json`, as in the Python SDK:
+and `MarshalJSON`/`MarshalText` methods used where `encoding/json` uses them (also on a nil pointer in a field
+of type `json.Marshaler` or `encoding.TextMarshaler`; where the method would panic, null is sent) — so the
+platform receives the shape Python and JavaScript apps send. Three things differ from `encoding/json`, as in
+the Python SDK:
 
 - Floats stay floats: `2.0` is not sent as the integer `2`, and NaN and ±Inf are sent as they are.
 - `[]byte` is sent as binary (msgpack bin, like Python `bytes`), not as a base64 string.
-- Every `time.Time`, wherever it is, becomes an RFC 3339 string in UTC (`"2026-01-02T03:04:05.123Z"`).
+- Every `time.Time` becomes an RFC 3339 string in UTC (`"2026-01-02T03:04:05.123Z"`) wherever it is: a value
+  or a map key, behind a pointer, in an interface, or embedded in a struct (which `encoding/json` encodes as
+  that time). Map keys naming the same instant become one entry.
+
+As with `encoding/json`, a nil slice or map — `Row(nil)` included — is sent as null; use `[]any{}` or
+`map[string]any{}` for an empty list or object.
 
 ```go
 type Reading struct {
@@ -140,7 +158,7 @@ override it:
 
 | Option | Environment variable | Description |
 |--------|----------------------|-------------|
-| `WithSerialNumber(s)` | `DEVICE_SERIAL_NUMBER` | Device serial number. Required — `New` fails without it. Can be used to authenticate as another device. |
+| `WithSerialNumber(s)` | `DEVICE_SERIAL_NUMBER` | Device serial number, sent as `DEVICE_SERIAL_NUMBER` in the metadata of publications and table writes. Required — `New` fails without it. It does not change the identity the connection authenticates with while the agent injects a per-app credential; use `WithCredentials` for that |
 | `WithDeviceKey(k)` | `DEVICE_KEY` | Device key |
 | `WithDeviceName(n)` | `DEVICE_NAME` | Device name |
 | `WithAppName(n)` | `APP_NAME` | App name |
@@ -149,13 +167,17 @@ override it:
 | `WithEnv(e)` | `ENV` | `PROD` (in any case) selects the production realm; anything else, unset included, the development realm |
 | `WithURL(u)` | `DEVICE_ENDPOINT_URL` | Router WebSocket URL, e.g. `wss://cbw.ironflock.com/ws-ua-usr`. Without it the URL comes from `DEVICE_ENDPOINT_URL` (path replaced by `/ws-ua-usr`), then from the studio URL |
 | `WithReswarmURL(u)` | `RESWARM_URL` | Studio URL used to look up the router of a known IronFlock deployment |
-| `WithCredentials(id, secret)` | `APP_AUTH_ID`, `APP_AUTH_SECRET` | WAMP-CRA credential. By default the per-app credential the agent injects is used (read from `/data/env` first, so a rotated credential is picked up on the next reconnect), falling back to the device serial number |
+| `WithCredentials(id, secret)` | `APP_AUTH_ID`, `APP_AUTH_SECRET` | WAMP-CRA credential. By default the per-app credential the agent injects is used (read from `/data/env` first, so a rotated credential is picked up on the next reconnect), falling back to the device serial number — the legacy credential, which [cross-app access](#cross-app-data-access) does not accept |
 | `WithReconnectWindow(d)` | | How long a table operation waits for the connection — after a platform restart, or before `Start` — and retries while the data backend comes back, before it fails (default 60 s; 0 turns it off). See [Connection reliability](#connection-reliability) |
 | `WithLogger(l)` | | `*slog.Logger` for connection lifecycle logs (default `slog.Default()`) |
 
 Missing `DEVICE_KEY`, `APP_NAME`, `SWARM_KEY` or `APP_KEY` are logged as a warning; the operations that need
 them fail with an error wrapping `ironflock.ErrMissingConfig`. Without `SWARM_KEY` or `APP_KEY`, `Start` fails
 at once: the app's realm could never be joined.
+
+The agent keeps `/data/env` up to date while the app runs, but makes it readable by root only. In a container
+that runs as another user the SDK sees the values the container started with — no rotated credential, no
+changed remote-access port — and logs a warning once.
 
 ## API Reference
 
@@ -190,19 +212,27 @@ the acknowledgement confirms delivery to the router, not the database insert. No
 subscribe to that topic; read rows back with `GetHistory` or `SubscribeToTable`.
 
 ```go
-err := ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5, "humidity": 60})
+err := ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"tsp": time.Now(), "temperature": 22.5, "humidity": 60})
 ```
+
+The row needs a `tsp`: the data backend drops a row without one, with nothing but an entry in the app's
+`error-logs` table to show for it. A row it refuses for lack of storage is dropped without even that (the
+`error-logs` table notes only when the appliance's disk runs full). `AppendToTable` reports such refusals.
 
 ### `AppendToTable(ctx, table, args ...any) (*Result, error)`
 
 Appends a row by calling the table's append procedure `append.<SWARM_KEY>.<APP_KEY>.<table>` and returns the
-insert outcome.
+insert outcome. A refused row is an error. A row without `tsp` is refused with `wamp.error.runtime_error` and
+no reason, which the error message then points out; the typed refusals are listed under
+[Data backend refusals](#data-backend-refusals) — `URIStorageFull`, for one, is temporary: append the row later.
 
 ### `PublishRowsToTable(ctx, table, rows any, kwargs ...Kwargs) error`
 
 Publishes **many rows in a single message** (bulk insert) to `bulk.<SWARM_KEY>.<APP_KEY>.<table>`. The
-platform inserts the batch atomically (all-or-nothing). `rows` is a non-empty slice of rows (`[]Row`,
-`[]map[string]any`, or a slice of structs).
+platform inserts the batch atomically (all-or-nothing), and drops a batch it refuses as `PublishToTable` drops
+a row. `rows` is a non-empty slice of rows (`[]Row`, `[]map[string]any`, or a slice of structs), each encoded
+exactly as `PublishToTable` encodes a row and carrying its own `tsp`. (A row is taken as a value, as by
+`PublishToTable`: a `MarshalJSON` or `MarshalText` method with a pointer receiver is used for `[]*T` only.)
 
 ```go
 err := ifl.PublishRowsToTable(ctx, "sensordata", []ironflock.Row{
@@ -214,7 +244,8 @@ err := ifl.PublishRowsToTable(ctx, "sensordata", []ironflock.Row{
 ### `AppendRowsToTable(ctx, table, rows any, kwargs ...Kwargs) (*Result, error)`
 
 Appends many rows in a single call to `appendBulk.<SWARM_KEY>.<APP_KEY>.<table>` and returns the outcome, e.g.
-`{"success": true, "count": 2}`. If any row is invalid the entire batch is rejected.
+`{"success": true, "count": 2}`. If any row is invalid the entire batch is rejected, with the refusals of
+`AppendToTable`.
 
 ### `ReportError(ctx, errOrMsg any, opts ...ReportErrorOptions) (*Result, error)`
 
@@ -260,6 +291,10 @@ one event per row, so handler code stays the same. The handler is called one eve
 events arrive on both feeds: it never runs concurrently with itself. `TableSubscription.Unsubscribe` removes
 both subscriptions; no handler call starts after it.
 
+A transform (a data template's SQL view) has no rows of its own: on every tick of its schedule the data
+backend publishes the whole view — at most 3000 rows — as one event. Read it with `ev.Rows()`; `ev.Row()` is
+nil for it.
+
 ```go
 ts, err := ifl.SubscribeToTable(ctx, "sensordata", func(ev *ironflock.Event) {
 	row := ev.Row()
@@ -269,7 +304,10 @@ ts, err := ifl.SubscribeToTable(ctx, "sensordata", func(ev *ironflock.Event) {
 
 ### `GetHistory(ctx, table, q *TableQueryParams) ([]Row, error)`
 
-Reads rows of a table or transform (`history.transformed.<table>`). `nil` reads the 10 most recent rows.
+Reads rows of a table or transform (`history.transformed.<table>`): the newest rows that match, in ascending
+`tsp` order. `nil` reads the 10 newest rows. A result too large for one message of the data backend (8 MiB)
+arrives in chunks, which `GetHistory` reassembles in memory into the rows of a single read; `ctx` must cover
+the whole transfer.
 
 ```go
 rows, err := ifl.GetHistory(ctx, "sensordata", &ironflock.TableQueryParams{
@@ -298,50 +336,84 @@ live, err := ifl.GetHistory(ctx, "parts", &ironflock.TableQueryParams{
 
 | Field | Description |
 |-------|-------------|
-| `Limit` | Maximum number of rows, 1–10000 (required) |
+| `Limit` | Maximum number of rows, 1–10000 (1–3000 for a transform) (required) |
 | `Offset` | Rows to skip |
-| `TimeRange` | `&TimeRange{Start, End}`; each bound a `time.Time`, an ISO 8601 string, an epoch-milliseconds number, or `nil` for an open end (`Between`, `Since`, `Until` build one from `time.Time`). Strings and numbers cannot be mixed |
+| `TimeRange` | `&TimeRange{Start, End}`: the rows with `Start <= tsp < End`. Each bound a `time.Time`, an ISO 8601 string, an epoch-milliseconds number, or `nil` for an open end (`Between`, `Since`, `Until` build one from `time.Time`). Strings and times cannot be mixed with numbers |
 | `FilterAnd` | AND-ed filters: `Where(column, operator, value)`, `IsNull`, `IsNotNull`, the `Latest()` marker, `Or(...)`/`And(...)` groups |
 | `Columns` | Columns to return (`tsp`, `device_key` and `authid` are always included); `nil` for all |
+| `ColumnPaths` | Prunes `json` columns: JSON paths in the notation filters use (`"json_data.a.b"`). A `json` column listed in `Columns` comes back holding only its paths (fleetdb v1.0.52 and later) |
 
-A `time.Time` bound is sent as RFC 3339 in UTC. A string bound is sent exactly as given, and the data backend
-reads it with JavaScript's `Date`, so the SDK accepts the extended ISO 8601 forms `Date` reads correctly: a
-date (`2026`, `2026-07`, `2026-07-01`), or a date and a time of day (`2026-07-01T12:30`, `2026-07-01T12:30:15`,
-`2026-07-01T12:30:15.250`; `T`, `t` or a space between them) with an optional `Z` or UTC offset (`+02:00` or
-`+0200`). A time without either is read as UTC. Other strings — basic format (`20260701T123000Z`), hours
-without minutes, offsets of hours only, days a month does not have (`2026-02-30`) — fail with
-`ErrInvalidArgument` before anything is sent.
+Table and secret reads currently use both bounds truncated to the whole second; series reads use them to the
+millisecond. A `time.Time` bound is sent as RFC 3339 in UTC, a number as epoch milliseconds (NaN and ±Inf are
+refused). A string bound is sent exactly as given, and the data backend reads it with JavaScript's `Date`, so
+the SDK accepts the extended ISO 8601 forms `Date` reads correctly: a date (`2026`, `2026-07`, `2026-07-01`),
+or a date and a time of day (`2026-07-01T12:30`, `2026-07-01T12:30:15`, `2026-07-01T12:30:15.250`; `T`, `t` or
+a space between them) with an optional `Z` or UTC offset (`+02:00` or `+0200`). A time without either is read
+as UTC. Other strings — basic format (`20260701T123000Z`), hours without minutes, offsets of hours only, days
+a month does not have (`2026-02-30`), a space before the time in the years 0–99 (`Date` reads
+`0001-01-01 00:00:00` as 2001) — fail with `ErrInvalidArgument` before anything is sent.
 
 Operators: `=`, `!=`, `<>`, `>`, `<`, `>=`, `<=`, `LIKE`, `ILIKE`, `NOT LIKE`, `NOT ILIKE`, `IN`, `NOT IN`,
-`IS NULL`, `IS NOT NULL`. `IN`/`NOT IN` take a slice. `IS NULL` and `IS NOT NULL` take no value and are the
-only way to ask about NULL. Columns your data template declares `secret: true` come back as
-`ironflock.SecretPlaceholder`.
+`IS NULL`, `IS NOT NULL`, in any case: the SDK sends them in this form, the only one the data backend
+accepts (an unknown operator is sent as given, with a warning). A comparison takes a string, number or bool —
+a value that encodes as a string, such as a `uuid.UUID`, is one. `IN`/`NOT IN` take a slice of those (or a
+comma-joined string); a nil or empty slice is the empty set: `IN` matches no row, `NOT IN` every row.
+`IS NULL` and `IS NOT NULL` take no value and are the only way to ask about NULL. Columns your data template
+declares `secret: true` come back as `ironflock.SecretPlaceholder`; a filter on one is refused
+(`URISecretColumn`).
+
+A transform (a data template's SQL view) applies `Limit`, `Offset` and `FilterAnd` only: it ignores
+`TimeRange`, `Columns`, `ColumnPaths` and `Latest()`, and drops a filter on a column the view does not declare
+(it has no implicit `tsp`, `device_key` or `authid`), which widens the result. Its rows come in the view's own
+order, reversed. Bound a transform's time range in its SQL.
 
 `ironflock.DecodeRows[T](rows)` converts rows into a slice of your own struct type (decode `tsp` into an
 `int64`: it arrives as epoch milliseconds).
 
 ### `GetSeriesHistory(ctx, table, q SeriesQueryParams) ([]Row, error)`
 
-Reads **down-sampled time series** of a table — numeric columns aggregated into time buckets — ideal for
-charts over long ranges (`history.transformed.series.<table>`; tables only, not transforms).
+Reads a table's history **down-sampled into time buckets** — columns aggregated per bucket — ideal for charts
+over long ranges (`history.transformed.series.<table>`; tables only, not transforms; data backends from
+fleetdb v1.0.58 on).
 
 ```go
+now := time.Now()
+avg := ironflock.SeriesMetric{Ref: "temperature", Method: ironflock.MethodAvg} // AVG, SUM, COUNT, MIN, MAX, FIRST, LAST
 series, err := ifl.GetSeriesHistory(ctx, "sensordata", ironflock.SeriesQueryParams{
-	Metrics:   []string{"temperature", "humidity"},
-	Method:    ironflock.MethodAvg, // AVG, SUM, COUNT, MIN, MAX, FIRST, LAST
-	Limit:     500,
-	TimeRange: ironflock.Between(start, end), // required
+	Metrics:   []ironflock.SeriesMetric{avg, {Ref: "humidity", Method: ironflock.MethodMax}},
+	Bucket:    time.Hour,                                      // 0: the range divided into Limit buckets
+	Limit:     24,                                             // the bucket budget, 1–10000
+	TimeRange: ironflock.Between(now.Add(-24*time.Hour), now), // required, with a start
 	GroupBy:   []string{"device_key"},
 })
+for _, row := range series {
+	log.Println(row["tsp"], row["device_key"], row[avg.Column()]) // avg.Column() is "AVG:temperature"
+}
 ```
 
-`FilterAnd` takes predicates only here: the `Latest()` marker and groups are not supported in series queries.
+Each row is one bucket — of one group, with `GroupBy`: `tsp` is the bucket's start in epoch milliseconds, each
+`GroupBy` column comes back under its own name, and each metric under `SeriesMetric.Column()`,
+`"<METHOD>:<ref>"`. The rows ascend by `tsp`; a bucket without rows is absent. A `Ref` can also be a JSON path
+into a `json` column (`"json_data.temp"`). AVG and SUM take numeric columns, MIN and MAX strings and
+timestamps too; FIRST and LAST give the value of the bucket's earliest and latest row; COUNT counts the values
+that are not null (of `tsp`: the rows).
+
+`Limit` counts buckets, not rows. Without a `Bucket` the time range is divided into `Limit` buckets. With one
+(at least 1 s, in whole milliseconds), the data backend widens the buckets to a multiple of it when the range
+holds more than `Limit` of them — and an open end reaches up to the data backend's now, a little after yours:
+`Since(now.Add(-24*time.Hour))` holds 25 hourly buckets, so `Limit: 24` gets two-hour ones. Bound the end, or
+allow a bucket more. `FilterAnd` takes predicates and groups; the `Latest()` marker is not supported here. The
+data backend refuses what it cannot answer with `URIInvalidTimeRange`, `URIInvalidMetric`, `URIInvalidGroupBy`
+and `URISeriesTooManyGroups` (more than 50,000 rows).
 
 ### `Call(ctx, topic, args ...any) (*Result, error)`
 
-Calls a procedure by its full WAMP URI. A `CallOptions` value among the arguments configures the call.
-An app cannot register names like `com.myapp.proc`, so this reaches procedures that platform services register
-on the app's realm; to call a function another device of your app registered, use `CallDeviceFunction`.
+Calls a procedure by its full WAMP URI. A `CallOptions` value among the arguments configures the call: a
+`Timeout` for the callee, `DiscloseMe`, and `OnProgress`, which receives the callee's progressive results in
+order (without it, a progressive result fails the call). When `ctx` ends, `Call` returns at once with an
+error wrapping `ctx.Err()`, and the router is told to cancel the call in the background. An app cannot
+register names like `com.myapp.proc`, so this reaches procedures that platform services register on the
+app's realm; to call a function another device of your app registered, use `CallDeviceFunction`.
 
 ### `CallDeviceFunction(ctx, deviceKey int, topic, args ...any) (*Result, error)`
 
@@ -373,8 +445,12 @@ _, err := ifl.RegisterDeviceFunction(ctx, "com.myapp.add", func(ctx context.Cont
 })
 ```
 
-The returned value becomes the result (`*Result` for several values or keyword results); a returned
-`*WampError` is sent with its URI, any other error as `wamp.error.runtime_error`.
+The returned value becomes the result (`*Result` for several values or keyword results), converted like any
+payload (see [Arguments and keyword arguments](#arguments-and-keyword-arguments)); a returned `*WampError` is
+sent with its URI and converted payload, any other error as `wamp.error.runtime_error` with its text. A result
+that cannot be converted (a channel, a function) is answered with `wamp.error.runtime_error` and logged. When
+the router discloses the caller, `inv.Details["caller_authid"]` is the calling device's serial number, whichever
+credential it used.
 
 ### `SetDeviceLocation(ctx, long, lat float64) (*Result, error)`
 
@@ -385,8 +461,18 @@ answers it on the app's realm yet, so it fails with `wamp.error.no_such_procedur
 
 The public URL under which a port declared in `port-template.yml` is reachable once its tunnel is active,
 e.g. `https://<device_key>-<app_name>-8080.app.ironflock.com`. `protocol` is `http` (default when empty),
-`https`, `tcp` or `udp`; tcp/udp ports need the template's `remote_port_environment` name. Values are read
-live, so call it again rather than caching the result.
+`https`, `tcp` or `udp`. Values are read live from `/data/env`, so call it again rather than caching the result.
+
+A tcp/udp URL carries the public port the tunnel assigned, which the device agent announces as
+`REMOTE_PORT_FOR_<port>` (agent 0.19.8 and later); a non-empty `remotePortEnvironment` names the variable to read
+instead — the template's own `remote_port_environment`, which older agents need. On an instance device the
+internet-facing port, the variable's `_CLOUD` companion, is preferred while the agent announces it; once it is
+gone (cloud forwarding turned off), the instance-local URL is returned again.
+
+The agent tunnels the ports of PROD installs only: in a DEV container the http(s) URL is that of the PROD
+install of the same app, and tcp/udp give none. On an appliance installed without a domain (plain mode) the
+agent sets the tunnel domain to `localhost`. The platform does not set `CLOUD_TUNNEL_DOMAIN`: an instance's
+URLs use `app.ironflock.com` unless the app sets that variable itself.
 
 ## Secret Columns
 
@@ -397,9 +483,11 @@ only by your app's own containers.
 
 ### `RevealSecrets(ctx, table, q *TableQueryParams) ([]Row, error)`
 
-Reads rows with the secret columns decrypted. `nil` reads the 10 most recent rows; `Limit` must be 1–100.
-Select rows by their non-secret columns — values are encrypted with a random IV, so filtering by the secret
-itself can never match.
+Reads rows with the secret columns decrypted, newest first (unlike `GetHistory`). `nil` reads the 10 most
+recent rows; `Limit` must be 1–100. Select rows by their non-secret columns — values are encrypted with a
+random IV, so the data backend refuses a filter on a secret column (`URISecretColumn`). It answers at most 30
+reveals a minute per app credential on a device (`URIRateLimited`): reveal a secret once and keep it, rather
+than on every use.
 
 ```go
 rows, err := ifl.RevealSecrets(ctx, "credentials", &ironflock.TableQueryParams{
@@ -411,7 +499,9 @@ rows, err := ifl.RevealSecrets(ctx, "credentials", &ironflock.TableQueryParams{
 
 Checks a candidate against a stored secret without reading it back; the comparison runs in constant time
 inside the data backend. `nil` checks the most recent row. `Match` is true when any selected row matches;
-an unexpected response never reads as a match.
+an unexpected response never reads as a match. The data backend answers at most 120 checks a minute per app
+credential on a device (`URIRateLimited`) — for a check on every request, cache a positive outcome briefly —
+and refuses a column that is not a secret column (`URINotASecretColumn`).
 
 ```go
 res, err := ifl.VerifySecret(ctx, "credentials", "api_key", receivedKey, nil)
@@ -422,7 +512,10 @@ if err == nil && res.Match { /* ... */ }
 
 Read another app's fleet data, in the same project and fleet. Your app must declare the provider app in its
 data-template `consumes:` section (or hold the wildcard grant, `consumes: [{app: "*"}]`), and the project user
-must grant access. Access is **read-only**.
+must grant access. Access is **read-only**. The connection needs the per-app credential the device agent
+injects (`APP_AUTH_ID`, `APP_AUTH_SECRET`). The platform refuses the legacy device credential on another app's
+realm (`NOT_AUTHORIZED`, with a message that says so) — unless the provider app runs on the same device, whose
+realm it then joins with that app's own full rights rather than read-only.
 
 ```yaml
 # .ironflock/data-template.yml of your app
@@ -446,18 +539,26 @@ _, err = weather.SubscribeToTable(ctx, "forecasts", func(ev *ironflock.Event) { 
 
 | Method | Description |
 |--------|-------------|
-| `ConnectToApp(ctx, app, opts ...ConnectToAppOptions) (*ConsumedApp, error)` | Opens (or returns the cached) read-only handle. `Stage` selects `"dev"`/`"prod"` (default: this app's stage); `OnError` is called when an open handle is later denied (e.g. the grant was revoked) |
+| `ConnectToApp(ctx, app, opts ...ConnectToAppOptions) (*ConsumedApp, error)` | Opens (or returns the cached) read-only handle. `Stage` selects `"dev"`/`"prod"` (default: this app's stage); `OnError` is called when an open handle is later denied for good (e.g. the grant was revoked) |
 | `ListConsumableApps(ctx) ([]ConsumedAppInfo, error)` | Lists every non-private provider and its catalog without connecting (wildcard consumers) |
 | `ConnectToAllApps(ctx, opts ...ConnectToAllAppsOptions) ([]*ConsumedApp, error)` | Opens every provider with a data backend for the stage (wildcard consumers). Failures go to `OnError` unless `StopOnError` is set |
 | `(*ConsumedApp).GetHistory`, `GetSeriesHistory`, `SubscribeToTable` | As for your own tables (series: tables only) |
 | `(*ConsumedApp).Close(ctx)` | Closes the handle; `Stop` closes all of them |
 
 Handles are cached per app and stage, and concurrent opens share one attempt; `ctx` bounds only the caller's
-wait. `ConsumedApp.Stage` is the stage in lower case (`"dev"` or `"prod"`), unlike `IronFlock.Stage()`.
-`Stop` aborts opens still in flight: they fail with an error wrapping `wamp.ErrStopped`. Errors are
-`*CrossAppAccessError` with a `Code`: `NO_GRANT`, `PROVIDER_NOT_INSTALLED`, `UNKNOWN_APP`, `PRIVATE_TABLE`
-(not in the provider's shared catalog), `SECRET_COLUMN` (a query filters on or selects a column the provider
-marks secret — including inside filter groups), `NOT_AUTHORIZED`.
+wait. App names match in any case; `ConsumedApp.App` keeps the spelling of the call that opened the handle.
+`ConsumedApp.Stage` is the stage in lower case (`"dev"` or `"prod"`), unlike `IronFlock.Stage()`. `Stop` aborts
+opens still in flight: they fail with an error wrapping `wamp.ErrStopped`. Errors are `*CrossAppAccessError`
+with a `Code`: `NO_GRANT`, `PROVIDER_NOT_INSTALLED`, `UNKNOWN_APP`, `PRIVATE_TABLE` (not in the provider's shared
+catalog), `SECRET_COLUMN` (a query filters on or selects a column the provider marks secret — including inside
+filter groups), `NOT_AUTHORIZED`.
+
+A denial while `ConnectToApp` waits is returned at once. Once a handle is open, a denial counts as final only
+when it persists — 3 refusals or more since the connection was last up (the router closing the session for an
+auth reason counts as one, as does each refused reconnect), the first at least 60 s ago — because the platform
+refuses the same way while it briefly cannot verify access. Until then the handle keeps reconnecting, and
+recovers if a reconnect succeeds. Once the denial is final, `OnError` is called and the handle is evicted: the
+next `ConnectToApp` opens a fresh connection.
 
 ## Managed File Storage
 
@@ -470,7 +571,7 @@ files := ifl.Files()
 info, err := files.Put(ctx, "part-1.jpg", jpeg, filestore.ContentType("image/jpeg"))
 
 // That URL is safe to put in a table column — a dashboard widget can render it.
-err = ifl.PublishToTable(ctx, "inspections", ironflock.Row{"part_id": "1", "photo_url": info.URL})
+err = ifl.PublishToTable(ctx, "inspections", ironflock.Row{"tsp": time.Now(), "part_id": "1", "photo_url": info.URL})
 
 data, err := files.Get(ctx, "part-1.jpg")
 for obj, err := range files.Iter(ctx, filestore.Prefix("2026/")) {
@@ -485,43 +586,70 @@ for obj, err := range files.Iter(ctx, filestore.Prefix("2026/")) {
 |--------|-------------|
 | `Put(ctx, key, data, opts...)` / `PutReader(ctx, key, r, size, opts...)` / `PutFile(ctx, key, path, opts...)` | Store bytes, a stream, or a local file. Returns `*ObjectInfo` with a permanent `URL` |
 | `Get(ctx, key, opts...)` / `GetTo(ctx, key, w, opts...)` / `GetToFile(ctx, key, path, opts...)` | Read into memory, a writer, or a file |
-| `List(ctx, opts...)` / `Iter(ctx, opts...)` | One page / every object (an `iter.Seq2`) under a prefix |
+| `List(ctx, opts...)` / `Iter(ctx, opts...)` | One page of a folder-style listing / every object under a prefix, in subfolders too (an `iter.Seq2`) |
 | `Stat(ctx, key, opts...)` / `Exists(ctx, key, opts...)` | Metadata without transferring |
 | `Delete` / `Copy(ctx, key, to, opts...)` / `Move` | `Move` is copy-then-delete and **not atomic** |
-| `URL(ctx, key, opts...)` / `CloudURL` | Permanent authenticated URL (`""` where the deployment has no HTTP edge) |
+| `URL(ctx, key, opts...)` / `CloudURL` | Permanent authenticated URL (`""` where the deployment has no HTTP edge); `CloudURL` through an appliance's cloud files tunnel (`""` while it is off) |
 | `ShareURL(ctx, key, opts...)` | Expiring bearer link (default 15 min) — hand it to a person, do not store it |
-| `UploadURL(ctx, key, opts...)` | Expiring presigned upload target |
+| `UploadURL(ctx, key, opts...)` | Expiring presigned upload target — a bearer write capability, see below |
 | `Usage(ctx, opts...)` | Bytes stored, quota and free bytes (`-1` when unlimited); `filestore.Detail()` adds a per-namespace breakdown |
-| `Catalog(ctx)` / `RefreshCatalog(ctx)` / `Namespaces(ctx)` | Namespaces and server limits (cached) |
+| `Catalog(ctx)` / `RefreshCatalog(ctx)` / `Namespaces(ctx)` | Namespaces and server limits, cached (`RefreshCatalog` re-fetches) |
 
-Options: `filestore.Namespace(n)` (default `"default"`), `ContentType`, `ToNamespace`, `Version`, `TTL`,
-`Size`, `Prefix`, `Limit`, `Cursor`, `Detail`.
+Options: `filestore.Namespace(n)`, `ContentType`, `ToNamespace`, `Version`, `TTL`, `Size`, `Prefix`,
+`Delimiter`, `Limit`, `Cursor`, `Detail`. Without `Namespace` (or with `""`) a call uses the namespace
+`"default"`, which exists only while the app's data template declares no namespaces of its own, or declares
+one named `default`.
+
+`List` returns the file service's folder view: the objects whose keys continue the prefix without a `/`, and
+the folders below in `Prefixes`; `filestore.Delimiter("")` lists flat. The file service (fleetfiles v0.2.0)
+refuses a prefix that ends in `/`, so `List` cannot open a folder by name — `Iter` can: `Iter(ctx,
+filestore.Prefix("2026/"))` yields every object under that folder, in subfolders too, and nothing else.
+The file service is the authority on keys: a malformed key or prefix (a leading or trailing `/`, an empty, `.`
+or `..` segment, characters such as `\ : * ? " < > |`, over 900 bytes) is refused — with `INVALID_KEY` by a
+service that classifies key errors, with `INTERNAL` by fleetfiles v0.2.0.
 
 `Files()` does no I/O and may be called before `Start`. A file call waits up to 10 s for the connection (before
 `Start` as well) and is not retried: unlike table operations, file calls do not use the reconnect window, so
-during a platform restart a call can fail with `NOT_AVAILABLE` until the file service has registered again.
+during a platform restart a call can fail with `NOT_AVAILABLE` until the file service has registered again —
+as it does whenever it binds the data backend anew. Such a call ran nowhere, so an app may repeat it.
 
 Objects up to the server's `InlineMaxBytes` (6 MiB) travel through the router; larger ones go directly to the
 object store over HTTPS through presigned URLs (`PutReader`, `PutFile`, `GetTo` and `GetToFile` stream, so a
-multi-gigabyte object never has to fit in memory). The direct path needs the device to reach the object store
-host; HTTP(S) proxies from the environment are honoured. `Stop` closes the idle connections of the store's HTTP
-client (`FileStore.CloseIdleConnections` does that for a store you create with `filestore.New(caller, nil)`).
+multi-gigabyte object never has to fit in memory; a namespace takes objects up to 100 MiB unless the data
+template's `maxObjectBytes` raises its cap, to at most 5 GiB). The direct path needs the device to reach the
+object store host; HTTP(S) proxies from the environment are honoured. Where the deployment cannot presign (an
+appliance, by default) or the object store is out of reach, reads fall back to ranges over the router
+(fleetfiles v0.1.33 and later); an object replaced during such a read fails it with `INTERNAL` ("object changed
+while it was read"). Writes have no such fallback: where the deployment cannot presign, a `Put` over the inline
+limit fails with `TOO_LARGE`. `Stop` closes the idle connections of the store's HTTP client
+(`FileStore.CloseIdleConnections` does that for a store you create with `filestore.New(caller, nil)`).
 
-`GetToFile` downloads into a temporary file next to the target and renames it into place once complete, so a
-failed download never leaves a partial file and keeps the previous one; the replaced file's permission bits are
-kept. Because the file is replaced rather than rewritten, its directory must be writable, and other hard links
-to it keep the old content. Symbolic links are followed, as Python's `open(path, "wb")` follows them: the file
-they lead to is replaced (created when the last link dangles) and the links stay. A FIFO or a device is written
-in place as the object streams in, and a file that is a mount point (a single file bind-mounted into the
-container) is overwritten once the download is complete.
+`GetToFile` reaches `path` as `open(2)` (and Python's `open(path, "wb")`) do, symbolic links included: the file
+they lead to is written (created when the last link dangles), and the links stay. It downloads into a temporary
+file next to that file and renames it into place once complete, so a failed download never leaves a partial
+file and keeps the previous one. The replacement gets, as far as the process may, the old file's owner and
+group, and then its permission bits (it is created for its owner only, so it is never more permissive than the
+old file); set-ID and sticky bits, ACLs and extended attributes are not carried over, and other hard links to
+the old file keep the old content. Its directory must take a new file and
+a rename — not on a read-only or pseudo file system such as `/proc` or `/sys`; write such a target with `GetTo`
+into `os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)`. A FIFO or a device is written in place as the object
+streams in (a FIFO nobody reads blocks the call: `ctx` cannot interrupt it), and a file that is a mount point
+(a single file bind-mounted into the container) is overwritten once the download is complete.
+
+The permanent URLs are composed from the cached catalog; `CloudURL` re-reads it when it is older than 30 s, as
+the user can switch the cloud tunnel at any time. The file edge answers the URL of an object in a namespace
+declared `share: none` with 404: read such objects with `Get`. An `UploadURL` target is checked against the
+namespace's content types and size cap and the quota when it is minted, not when it is used (the URL is
+signed for the host only): anyone holding it can write any content to its key until it expires.
 
 A failure of the file service or of a direct transfer is a `*filestore.Error` with a stable `Code` — branch on
 it, never on `Reason` (a cancelled context, local file errors and router-level WAMP errors other than the ones
-below come back as they are):
-`NOT_AUTHORIZED`, `NO_SUCH_NAMESPACE`, `NO_SUCH_OBJECT`, `TOO_LARGE`, `OBJECT_TOO_LARGE`, `QUOTA_EXCEEDED`,
-`CONTENT_TYPE_NOT_ALLOWED`, `NOT_SUPPORTED`, `NOT_AVAILABLE` (no file service on this deployment, or not yet
-after a restart), `PRESIGN_UNREACHABLE` (object store not reachable directly — a proxy?), `CLOCK_SKEW` (device
-clock too far off; check NTP), `INTERNAL`. A newer server may add codes; they pass through as-is.
+below come back as they are): `NOT_AUTHORIZED`, `NO_SUCH_NAMESPACE`, `NO_SUCH_OBJECT`, `TOO_LARGE`,
+`OBJECT_TOO_LARGE`, `QUOTA_EXCEEDED`, `CONTENT_TYPE_NOT_ALLOWED`, `INVALID_KEY` (a malformed key or prefix),
+`INVALID_RANGE` (a range outside the object, which the SDK never asks for), `NOT_SUPPORTED`, `NOT_AVAILABLE` (no
+file service on this deployment, or not yet after a restart), `PRESIGN_UNREACHABLE` (object store not reachable
+directly — a proxy?), `CLOCK_SKEW` (device clock too far off; check NTP), `INTERNAL`. A newer server may add
+codes; they pass through as-is.
 
 ## URIs an app may use
 
@@ -541,10 +669,12 @@ connection. A refused action fails with `wamp.error.not_authorized` (`ironflock.
 | `sys.appaccess.list`, `sys.appaccess.resolve` | call | `ListConsumableApps`, `ConnectToApp`, `ConnectToAllApps` |
 
 **Identity-checked names.** Names that start with a digit — the table write topics and the device-function
-URIs — also pass the platform's identity check: only the device a function URI names may register it (or
-publish on it), and only with your realm's swarm key, app key and stage; a table write topic must carry your
-realm's swarm key and app key. Prefix and wildcard patterns over these names are refused. Let the SDK build
-these URIs (`RegisterDeviceFunction`, `CallDeviceFunction`, `PublishToTable`).
+URIs — also pass the platform's identity check, which binds them to your realm's swarm key. A registration is
+accepted only for a function URI of your own device with your realm's swarm key, app key and stage
+(`<SWARM_KEY>.<DEVICE_KEY>.<APP_KEY>.<STAGE>.<name>`); a prefix or wildcard registration only when it fixes those
+four segments. Publish and call need only your realm's swarm key: a row published to a table topic with another
+app key is accepted, but reaches no data backend and is lost. Apps cannot subscribe to these names. Let the SDK
+build these URIs (`RegisterDeviceFunction`, `CallDeviceFunction`, `PublishToTable`).
 
 **Reserved names.** The router refuses `sys.` apart from the two cross-app procedures above, and `wamp.` apart
 from `wamp.session.get` (the JavaScript SDK's heartbeat). The other names in the table belong to the platform:
@@ -557,8 +687,9 @@ subscribes to raw table topics: they carry the row as sent, including the plaint
 
 The connection reconnects on its own. When the socket drops, the SDK retries until the router is back
 (1 s backoff growing to 2 s), then restores every subscription and every registered device function — you
-never re-subscribe. If one cannot be restored, the rest still are, and the failed one is retried on the next
-reconnect.
+never re-subscribe. If one cannot be restored, the rest still are, and the failed one is retried while the
+session lasts (after 1 s, doubling up to 30 s) and after every reconnect: the router accepted it before, so its
+refusal is a passing one, such as the platform's identity check failing closed for a moment.
 
 A router that is reachable but has no realm for the app yet (the data backend is still being provisioned) is
 retried every couple of seconds, so the app comes up the moment the realm does. A realm still missing after
@@ -595,13 +726,34 @@ wrapping `wamp.ErrNotConnected`.
 `errors.Is` and `errors.As` see through `*OperationError`: `errors.Is(err, wamp.ErrStopped)` holds for a
 `PublishToTable` after `Stop`.
 
+### Data backend refusals
+
+An operation the data backend refuses fails with an `*OperationError` around a `*WampError` that carries one of
+these URIs (and the reason as its first argument). Branch on `ironflock.WampURI(err)`; the SDK retries none of
+them. A published row the data backend refuses is dropped without an error (see `PublishToTable`).
+
+| Constant | Refused |
+|----------|---------|
+| `URIRateLimited` | `RevealSecrets` beyond 30, `VerifySecret` beyond 120 calls a minute per app credential on a device |
+| `URIResultTooLarge` | A read with a single row over the 8 MiB message budget, or a result over the 1 GiB guard (other large results arrive in chunks, which the SDK reassembles); its kwargs name the largest columns |
+| `URIInvalidLimit` | A read of a transform with a `Limit` over 3000 |
+| `URIInvalidTimeRange`, `URIInvalidMetric`, `URIInvalidGroupBy`, `URISeriesTooManyGroups` | Series queries the table cannot answer (see `GetSeriesHistory`) |
+| `URISecretColumn`, `URINotASecretColumn` | A filter on a secret column; `VerifySecret` on a column that is not secret, or `RevealSecrets` of a table without secret columns |
+| `URIStorageFull` | An append while the appliance's disk is nearly full — temporary: append the rows later |
+| `URIStorageOverusage` | An append beyond the account's storage allowance |
+| `URIEntityKeyConflict` | A row whose entity key (`maintainLatestFlagFor`) and `tsp` another row has already, in the batch or stored: give every row its own `tsp` |
+| `URISecretSentinelUnresolvable`, `URISecretCiphertextRejected` | A write that keeps a secret's previous value without an entity key to find it by; a write of an already encrypted value |
+
 ## Advanced usage
 
 `ifl.Connection()` is the underlying `*wamp.Connection`, a self-healing WAMP session with the methods
 `Call`, `Publish`, `Subscribe`, `Register` and friends; it can also be used on its own (see
 [examples/connection](examples/connection)). Unlike the `IronFlock` methods, its operations do not wait for
-`Start`: until `Start` has configured the connection they fail with `wamp.ErrNotConfigured`. The rules in
-[URIs an app may use](#uris-an-app-may-use) apply to it as well.
+`Start`: until `Start` has configured the connection they fail with `wamp.ErrNotConfigured`. Its `Register`
+sends a handler's values as given, so return JSON-like values (`nil`, booleans, numbers, strings, `[]byte`,
+`[]any`, `map[string]any`); `RegisterDeviceFunction` converts them for you. `wamp.IsNotServedYet(err)` tells
+the refusals of a call whose procedure is not registered (yet): such a call never ran, so it can be repeated.
+The rules in [URIs an app may use](#uris-an-app-may-use) apply to it as well.
 
 ## Differences from the Python and JavaScript SDKs
 
@@ -620,6 +772,13 @@ it takes the more robust variant; Go-specific choices:
   ping API.
 - There are no retained-event options (`get_retained`, `retain`): ironflock-router does not keep retained
   events. Raw WAMP options still pass through `SubscribeOptions.Extra` and `PublishOptions.Extra`.
+- `GetSeriesHistory` takes a method per metric (`SeriesMetric`), the series query of fleetdb v1.0.58 and later.
+  The Python and JavaScript SDKs 1.9.0 send the earlier query, which current data backends refuse.
+- Where the 1.9.0 Python and JavaScript SDKs predate the current backends, Go follows the backends: large
+  history results are reassembled from chunks (they fail with `result_too_large` there), `List` and `Iter`
+  handle the file service's folder-style listing, tcp/udp remote-access URLs read `REMOTE_PORT_FOR_<port>`, a
+  failed restore is retried while the session lasts, and a consumed app's auth denial counts only once it
+  persists.
 
 ## Development
 
