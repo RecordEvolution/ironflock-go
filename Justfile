@@ -24,16 +24,40 @@ coverage:
 router-up:
 	{{harness}}/start.sh
 
+# Build an ironflock-router binary from a checkout (default ref HEAD), against the nexus fork commit this SDK pins
+router-build src out="integration/ironflock-router/.bin/ironflock-router" ref="HEAD":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# The router's go.mod replaces nexus with a path on its maintainer's machine
+	# (and its `just build` wants a ../../nexus checkout): build a copy of the
+	# ref with the fork's module version instead, leaving the checkout untouched.
+	nexus="$(go list -m -f '{{{{with .Replace}}{{{{.Path}}@{{{{.Version}}{{{{end}}' github.com/gammazero/nexus/v3)"
+	out="$(mkdir -p "$(dirname "{{out}}")" && cd "$(dirname "{{out}}")" && pwd -P)/$(basename "{{out}}")"
+	tmp="$(mktemp -d "${TMPDIR:-/tmp}/ironflock-router-build.XXXXXX")"
+	trap 'rm -rf -- "$tmp"' EXIT
+	git -C "{{src}}" archive "{{ref}}" | tar -x -C "$tmp"
+	cd "$tmp"
+	go mod edit -replace="github.com/gammazero/nexus/v3=$nexus"
+	go mod tidy
+	go build -o "$out" ./cmd/ironflock-router
+	echo "built $out ($(git -C "{{src}}" describe --tags --always "{{ref}}"), nexus $nexus)"
+
+# Offline checks of the integration harness: the fake platform against the real services' contract tables, and the scripts
+test-harness:
+	"${PYTHON:-python3}" -I integration/test_fake_platform.py
+	integration/ironflock-router/test_scripts.sh
+
 # Stop the ironflock-router harness
 router-down:
 	{{harness}}/stop.sh
 
 # Integration tests: start the harness (ROUTER_BIN or ROUTER_IMAGE), run the Python reference and the Go suites, stop it
-test-integration:
+test-integration: test-harness
 	#!/usr/bin/env bash
 	set -euo pipefail
 	harness="$PWD/{{harness}}"
-	# Absolute, so that restart.sh finds the instance from the test's directory.
+	# Absolute, so that restart.sh (run from integration/ by the test, as
+	# ironflock-router/restart.sh) finds the instance.
 	mkdir -p "${STATE_DIR:=$harness/.run}"
 	STATE_DIR="$(cd "$STATE_DIR" && pwd -P)"
 	export STATE_DIR
@@ -59,5 +83,5 @@ test-integration:
 	IRONFLOCK_TEST_ENV_DIR="$harness/perapp_env" \
 	IRONFLOCK_TEST_REFERENCE="$tmp/py_reference.json" \
 	IRONFLOCK_TEST_PYTHON="$py" \
-	IRONFLOCK_TEST_RESTART_ROUTER="$harness/restart.sh" \
+	IRONFLOCK_TEST_RESTART_ROUTER=ironflock-router/restart.sh \
 		go test -tags integration -race -count=1 -v ./integration/...

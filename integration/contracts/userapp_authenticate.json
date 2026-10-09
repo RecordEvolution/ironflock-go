@@ -1,0 +1,1565 @@
+{
+ "source": "REaccounting database/function/device/f_authenticate_userapp.sql, run in postgres:16-alpine with pgcrypto over the harness facts of fake_auth.PlatformDB",
+ "states": [
+  {
+   "app_cred_key": true,
+   "cases": [
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_grant",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-99-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "unknown_provider",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed_realm_stage",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-prod-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-27-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 27,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e0@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-026-dev-e01@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@unknown",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "unknown",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-3-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "strict",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_denied",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 77,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "no_grant",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm1",
+     "verdict": {
+      "reason": "bad_realm",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e3@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    }
+   ],
+   "epochs": [],
+   "grants": [
+    "weather"
+   ],
+   "name": "defaults"
+  },
+  {
+   "app_cred_key": true,
+   "cases": [
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_grant",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-99-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "unknown_provider",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed_realm_stage",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-prod-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-27-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 27,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e0@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-026-dev-e01@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@unknown",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "unknown",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-3-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "strict",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_denied",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 77,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "no_grant",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm1",
+     "verdict": {
+      "reason": "bad_realm",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e3@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    }
+   ],
+   "epochs": [],
+   "grants": [
+    "*"
+   ],
+   "name": "wildcard grant"
+  },
+  {
+   "app_cred_key": true,
+   "cases": [
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_grant",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-99-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "unknown_provider",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed_realm_stage",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-prod-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-27-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 27,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "CwytYUA2IXwJHmdt9RTnubr65ZG1eP3gw8CTqCakwHY=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e0@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-026-dev-e01@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@unknown",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "unknown",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-3-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "strict",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_denied",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 77,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "no_grant",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm1",
+     "verdict": {
+      "reason": "bad_realm",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e3@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "CwytYUA2IXwJHmdt9RTnubr65ZG1eP3gw8CTqCakwHY=",
+      "stage": "DEV",
+      "success": true
+     }
+    }
+   ],
+   "epochs": [
+    {
+     "app": 26,
+     "epoch": 2,
+     "rotated_seconds_ago": 0,
+     "stage": "DEV"
+    }
+   ],
+   "grants": [
+    "weather"
+   ],
+   "name": "rotated to epoch 2 just now"
+  },
+  {
+   "app_cred_key": true,
+   "cases": [
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-99-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-prod-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-27-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 27,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "not_installed",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "CwytYUA2IXwJHmdt9RTnubr65ZG1eP3gw8CTqCakwHY=",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "app-26-dev-e0@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-026-dev-e01@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@unknown",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "unknown",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-3-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "strict",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_denied",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 77,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "no_grant",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm1",
+     "verdict": {
+      "reason": "bad_realm",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e3@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "CwytYUA2IXwJHmdt9RTnubr65ZG1eP3gw8CTqCakwHY=",
+      "stage": "DEV",
+      "success": true
+     }
+    }
+   ],
+   "epochs": [
+    {
+     "app": 26,
+     "epoch": 2,
+     "rotated_seconds_ago": 960,
+     "stage": "DEV"
+    }
+   ],
+   "grants": [
+    "weather"
+   ],
+   "name": "rotated to epoch 2 16 minutes ago"
+  },
+  {
+   "app_cred_key": false,
+   "cases": [
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-99-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-prod-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "PROD",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-27-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 27,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e0@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-026-dev-e01@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "no_app_cred_key",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@unknown",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "unknown",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-3-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "swarm_device",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "strict",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_denied",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 77,
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "device_key": 42,
+      "role": "app_reader",
+      "secret": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "stage": "DEV",
+      "success": true
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "dual",
+     "realm": "realm-2-3-dev",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "no_grant",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-prod",
+     "verdict": {
+      "cred": "LEGACY",
+      "device_key": 42,
+      "reason": "legacy_foreign",
+      "success": false
+     }
+    },
+    {
+     "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm1",
+     "verdict": {
+      "reason": "bad_realm",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e@x",
+      "cred": "APP",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "APP-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "authid": "app-26-DEV-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+      "cred": "LEGACY",
+      "reason": "unknown_device",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e3@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-26-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    },
+    {
+     "authid": "app-26-dev-e2@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+     "legacy_mode": "own_realm_only",
+     "realm": "realm-2-77-dev",
+     "verdict": {
+      "app_key": 26,
+      "cred": "APP",
+      "device_key": 42,
+      "reason": "stale_epoch",
+      "stage": "DEV",
+      "success": false
+     }
+    }
+   ],
+   "epochs": [],
+   "grants": [
+    "weather"
+   ],
+   "name": "no app credential key"
+  }
+ ]
+}

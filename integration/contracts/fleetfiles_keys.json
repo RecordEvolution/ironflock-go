@@ -1,0 +1,309 @@
+{
+ "cases": [
+  {
+   "key": "a",
+   "normalized": "a"
+  },
+  {
+   "key": "a/b c.txt",
+   "normalized": "a/b c.txt"
+  },
+  {
+   "error": "object key must not end with '/'",
+   "key": "a/"
+  },
+  {
+   "error": "object key must not start with '/'",
+   "key": "/a"
+  },
+  {
+   "error": "object key must not be empty",
+   "key": ""
+  },
+  {
+   "error": "object key must not contain an empty path segment ('//')",
+   "key": "a//b"
+  },
+  {
+   "error": "object key must not contain a '.' path segment",
+   "key": "a/./b"
+  },
+  {
+   "error": "object key must not contain a '..' path segment",
+   "key": "a/../b"
+  },
+  {
+   "error": "object key must not contain a '.' path segment",
+   "key": "."
+  },
+  {
+   "error": "object key must not contain a '..' path segment",
+   "key": ".."
+  },
+  {
+   "error": "object key must not start with \"_sys/\", which is reserved",
+   "key": "_sys/x"
+  },
+  {
+   "key": "_sys",
+   "normalized": "_sys"
+  },
+  {
+   "key": "_sysx/y",
+   "normalized": "_sysx/y"
+  },
+  {
+   "error": "path segment \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" is longer than 255 bytes",
+   "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "error": "object key is 901 bytes, the maximum is 900",
+   "key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "key": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s",
+   "normalized": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s"
+  },
+  {
+   "error": "object key has 21 segments, the maximum is 20",
+   "key": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s"
+  },
+  {
+   "key": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+   "normalized": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+  },
+  {
+   "error": "path segment \"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss\" is longer than 255 bytes",
+   "key": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+  },
+  {
+   "error": "path segment \" a\" must not start or end with a space",
+   "key": " a"
+  },
+  {
+   "error": "path segment \"a \" must not start or end with a space",
+   "key": "a "
+  },
+  {
+   "error": "path segment \" b\" must not start or end with a space",
+   "key": "a/ b"
+  },
+  {
+   "error": "path segment \"a \" must not start or end with a space",
+   "key": "a /b"
+  },
+  {
+   "error": "path segment \"a.\" must not end with '.'",
+   "key": "a."
+  },
+  {
+   "error": "path segment \"a.\" must not end with '.'",
+   "key": "a./b"
+  },
+  {
+   "key": "a.b",
+   "normalized": "a.b"
+  },
+  {
+   "key": ".hidden",
+   "normalized": ".hidden"
+  },
+  {
+   "error": "path segment \"a\\x00b\" must not contain control characters",
+   "key": "a\u0000b"
+  },
+  {
+   "error": "path segment \"a\\x1fb\" must not contain control characters",
+   "key": "a\u001fb"
+  },
+  {
+   "error": "path segment \"a\\x7fb\" must not contain control characters",
+   "key": "ab"
+  },
+  {
+   "error": "path segment \"a\\u200bb\" must not contain Unicode format characters",
+   "key": "a​b"
+  },
+  {
+   "error": "path segment \"a\\u202eb\" must not contain Unicode format characters",
+   "key": "a‮b"
+  },
+  {
+   "error": "path segment \"a\\\\b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a\\b"
+  },
+  {
+   "error": "path segment \"a:b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a:b"
+  },
+  {
+   "error": "path segment \"a*b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a*b"
+  },
+  {
+   "error": "path segment \"a?b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a?b"
+  },
+  {
+   "error": "path segment \"a\\\"b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a\"b"
+  },
+  {
+   "error": "path segment \"a<b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a<b"
+  },
+  {
+   "error": "path segment \"a>b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a>b"
+  },
+  {
+   "error": "path segment \"a|b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a|b"
+  },
+  {
+   "error": "path segment \"a^b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a^b"
+  },
+  {
+   "error": "path segment \"a~b\" must not contain any of \\ : * ? \" < > | ^ ~",
+   "key": "a~b"
+  },
+  {
+   "key": "café",
+   "normalized": "café"
+  },
+  {
+   "key": "café",
+   "normalized": "café"
+  },
+  {
+   "key": "é/x",
+   "normalized": "é/x"
+  },
+  {
+   "key": "日本語/ファイル.txt",
+   "normalized": "日本語/ファイル.txt"
+  },
+  {
+   "key": "emoji/😀.png",
+   "normalized": "emoji/😀.png"
+  },
+  {
+   "key": "a/b/c/d/e",
+   "normalized": "a/b/c/d/e"
+  },
+  {
+   "error": "path segment \"a\\tb\" must not contain control characters",
+   "key": "a\tb"
+  },
+  {
+   "error": "path segment \"a\\nb\" must not contain control characters",
+   "key": "a\nb"
+  },
+  {
+   "error": "path segment \"üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü\" is longer than 255 bytes",
+   "key": "üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü"
+  },
+  {
+   "error": "object key is 902 bytes, the maximum is 900",
+   "key": "üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü"
+  },
+  {
+   "key": "a%20b",
+   "normalized": "a%20b"
+  },
+  {
+   "key": "a+b",
+   "normalized": "a+b"
+  },
+  {
+   "key": "a#b",
+   "normalized": "a#b"
+  },
+  {
+   "key": "a&b",
+   "normalized": "a&b"
+  },
+  {
+   "key": "a=b",
+   "normalized": "a=b"
+  },
+  {
+   "key": "a;b",
+   "normalized": "a;b"
+  },
+  {
+   "key": "a,b",
+   "normalized": "a,b"
+  },
+  {
+   "key": "a'b",
+   "normalized": "a'b"
+  },
+  {
+   "key": "a@b",
+   "normalized": "a@b"
+  },
+  {
+   "key": "a$b",
+   "normalized": "a$b"
+  },
+  {
+   "key": "a!b",
+   "normalized": "a!b"
+  },
+  {
+   "key": "a(b)",
+   "normalized": "a(b)"
+  },
+  {
+   "key": "a[b]",
+   "normalized": "a[b]"
+  },
+  {
+   "key": "a{b}",
+   "normalized": "a{b}"
+  },
+  {
+   "error": "path segment \"\\ufeffa\" must not contain Unicode format characters",
+   "key": "﻿a"
+  },
+  {
+   "error": "path segment \"a\\u00adb\" must not contain Unicode format characters",
+   "key": "a­b"
+  },
+  {
+   "key": "́",
+   "normalized": "́"
+  },
+  {
+   "error": "object key must not contain a '.' path segment",
+   "key": "trailing/."
+  },
+  {
+   "error": "object key must not contain a '..' path segment",
+   "key": "x/.."
+  },
+  {
+   "error": "object key must not end with '/'",
+   "key": "dir/sub/"
+  },
+  {
+   "error": "object key must not end with '/'",
+   "key": "a/b/"
+  },
+  {
+   "error": "path segment \"  \" must not start or end with a space",
+   "key": "  "
+  },
+  {
+   "key": "a　b",
+   "normalized": "a　b"
+  },
+  {
+   "key": "　a",
+   "normalized": "　a"
+  }
+ ],
+ "source": "fleetfiles-service v0.2.0 internal/naming/naming.go NormalizeKey"
+}

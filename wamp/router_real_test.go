@@ -11,29 +11,46 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gammazero/nexus/v3/client"
+	nxwamp "github.com/gammazero/nexus/v3/wamp"
 )
 
 // Tests against a real router: ironflock-router with the fake platform, as
 // integration/ironflock-router/start.sh runs them. They run only when
 // IRONFLOCK_TEST_ROUTER_URL is set, e.g. to ws://localhost:18082/ws-ua-usr.
 //
-// The connection joins realm-2-26-dev with the harness's per-app credential,
-// which the router admits with the production `app` role. That role
-// registers only device-function URIs <swarm>.<device>.<app>.<STAGE>.<name>,
-// and the router's identity check reserves them to the device they name, so
-// the tests register and call functions of device 42 (realRouterFunction)
-// and publish and subscribe names of their own.
-const (
-	realRouterRealm  = "realm-2-26-dev"
-	realRouterAuthID = "app-26-per-app"
-	realRouterSecret = "per-app-secret"
-)
+// The connection joins realm-2-26-dev with the harness's per-app credential
+// (realRouterCredential), which the router admits with the production `app`
+// role. That role registers only device-function URIs
+// <swarm>.<device>.<app>.<STAGE>.<name>, and the router's identity check
+// reserves them to the device they name, so the tests register and call
+// functions of device 42 (realRouterFunction), whose credential it is, and
+// publish and subscribe names of their own.
+const realRouterRealm = "realm-2-26-dev"
+
+// realRouterCredential returns the harness's per-app credential of device
+// 42 for app 26 (DEV), as the device agent writes it into /data/env: the
+// files in integration/ironflock-router/perapp_env, read as the SDK reads
+// /data/env.
+func realRouterCredential(t *testing.T) (authID, secret string) {
+	t.Helper()
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join("..", "integration", "ironflock-router", "perapp_env", name+".txt"))
+		if err != nil {
+			t.Fatalf("the harness's per-app credential: %v", err)
+		}
+		return strings.TrimSpace(string(data))
+	}
+	return read("APP_AUTH_ID"), read("APP_AUTH_SECRET")
+}
 
 // realRouterFunction returns the URI of the device function name of the
 // harness's device 42.
@@ -45,14 +62,15 @@ func realRouterConn(t *testing.T, url string, mutate func(*Config)) (*Connection
 	c := NewConnection()
 	c.t.initialRetryDelay = 50 * time.Millisecond
 	c.t.retryFirstDelay = 50 * time.Millisecond
+	authID, secret := realRouterCredential(t)
 	cfg := Config{
 		SwarmKey:     2,
 		AppKey:       26,
 		Stage:        StageDevelopment,
 		URL:          url,
 		SerialNumber: "router-real-test",
-		AuthID:       realRouterAuthID,
-		AuthSecret:   realRouterSecret,
+		AuthID:       authID,
+		AuthSecret:   secret,
 		Logger:       slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	if mutate != nil {
@@ -303,6 +321,35 @@ func TestRealRouter(t *testing.T) {
 		}
 		if outcomes["ok"] != rounds*pollers {
 			t.Fatalf("served %d calls, want %d", outcomes["ok"], rounds*pollers)
+		}
+	})
+
+	// The router passes a callee's progressive results on to a caller that
+	// asks for them with OnProgress, as fleetdb streams a large read.
+	t.Run("progressive results", func(t *testing.T) {
+		callee, _ := realRouterConn(t, routerURL, nil)
+		if err := callee.Start(ctxTimeout(t, 15*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		cli := callee.currentSession().cli // a nexus callee that can send progressive results
+		streamed := realRouterFunction("gosdk_progress_" + suffix)
+		if err := cli.Register(streamed, func(ctx context.Context, _ *nxwamp.Invocation) client.InvokeResult {
+			for i := range 3 {
+				if err := cli.SendProgress(ctx, nxwamp.List{i}, nil); err != nil {
+					return client.InvokeResult{Err: "test.error.progress", Args: nxwamp.List{err.Error()}}
+				}
+			}
+			return client.InvokeResult{Args: nxwamp.List{"done"}}
+		}, nxwamp.Dict{}); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		var got []any
+		res, err := c.Call(ctx, streamed, nil, nil, &CallOptions{OnProgress: func(r *Result) { got = append(got, r.Value()) }}, 0)
+		if err != nil || res.Value() != "done" {
+			t.Fatalf("Call = %v, %v", res, err)
+		}
+		if want := []any{int64(0), int64(1), int64(2)}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("progressive results %v, want %v", got, want)
 		}
 	})
 

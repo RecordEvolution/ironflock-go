@@ -35,13 +35,27 @@ resolve_state_dir() {
   STATE_DIR="$(cd "$STATE_DIR" && pwd -P)"
 }
 
-# absolute PATH: PATH made absolute against the current directory; a bare
-# command name is looked up in PATH.
+# absolute COMMAND: a command's path made absolute against the current
+# directory; a bare command name is looked up in PATH.
 absolute() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
     */*) printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")" ;;
     *) command -v "$1" ;;
+  esac
+}
+
+# absolute_file PATH: a file path made absolute against the current directory,
+# whatever its shape (never a PATH lookup); fails if its directory does not
+# exist.
+absolute_file() {
+  local dir
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *)
+      dir="$(cd "$(dirname "$1")" && pwd -P)" || return 1
+      printf '%s/%s\n' "$dir" "$(basename "$1")"
+      ;;
   esac
 }
 

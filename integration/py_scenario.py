@@ -1,11 +1,18 @@
-"""Runs the cross-SDK wire scenario with the Python SDK and prints, per step,
-what the fake platform recorded plus the SDK's return value, as JSON."""
+"""Runs the cross-SDK wire scenario with the Python SDK and writes, per step,
+what the fake platform recorded, the SDK's return value and its error class,
+as JSON (usage: py_scenario.py OUT.json).
+
+The steps and their payloads are the same in js_scenario.mjs and
+scenario_test.go. The error class is "<Type>: <code>" for the SDKs' typed
+errors (CrossAppAccessError, FileStoreError), "WampError: <uri>" for a WAMP
+error from the router or a backend, else "<Type>: "."""
 
 import asyncio
 import json
 import os
 import sys
 
+from autobahn.wamp.exception import ApplicationError
 from ironflock import IronFlock
 
 URL = os.environ.get("IRONFLOCK_TEST_PLATFORM_URL", "ws://localhost:18082/ws-ua-usr")
@@ -27,6 +34,17 @@ def jsonable(v):
     return repr(type(v).__name__)
 
 
+def error_class(e):
+    if isinstance(getattr(e, "code", None), str):
+        return "%s: %s" % (type(e).__name__, e.code)
+    cause = e
+    while cause is not None:  # the SDK wraps the ApplicationError (raise ... from e)
+        if isinstance(cause, ApplicationError):
+            return "WampError: %s" % cause.error
+        cause = cause.__cause__
+    return "%s: " % type(e).__name__
+
+
 async def main():
     ifl = IronFlock(ironFlockUrl=URL, reconnect_window=5)
     await ifl.start()
@@ -38,17 +56,22 @@ async def main():
             result = await coro_fn()
             err = None
         except Exception as e:  # noqa: BLE001
-            result, err = None, "%s: %s" % (type(e).__name__, getattr(e, "code", ""))
+            result, err = None, error_class(e)
         await asyncio.sleep(settle)
         rec = await ifl.call("test.recorded")
         out[name] = {"recorded": rec, "result": jsonable(result), "error": err}
 
     f = ifl.files
-    await step("publish_to_table_row", lambda: ifl.publish_to_table("sensordata", {"temperature": 22.5, "n": 3}))
+    # Every row carries tsp: fleetdb refuses an append without one and drops
+    # such a publish. A kwargs-only publish reaches fleetdb without args[0],
+    # so a table with the default column paths drops it too.
+    await step("publish_to_table_row", lambda: ifl.publish_to_table("sensordata", {"tsp": "2026-01-01T00:00:01Z", "temperature": 22.5, "n": 3}))
     await step("publish_to_table_kwargs", lambda: ifl.publish_to_table("sensordata", temperature=1.5))
-    await step("append_to_table", lambda: ifl.append_to_table("sensordata", {"temperature": 23}))
-    await step("publish_rows_to_table", lambda: ifl.publish_rows_to_table("sensordata", [{"temperature": 1}, {"temperature": 2}], batch="b1"))
-    await step("append_rows_to_table", lambda: ifl.append_rows_to_table("sensordata", [{"temperature": 3}]))
+    await step("append_to_table", lambda: ifl.append_to_table("sensordata", {"tsp": "2026-01-01T00:00:02Z", "temperature": 23}))
+    await step("append_without_tsp", lambda: ifl.append_to_table("sensordata", {"temperature": 23}))
+    await step("publish_rows_to_table", lambda: ifl.publish_rows_to_table("sensordata", [
+        {"tsp": "2026-01-01T00:00:03Z", "temperature": 1}, {"tsp": "2026-01-01T00:00:04Z", "temperature": 2}], batch="b1"))
+    await step("append_rows_to_table", lambda: ifl.append_rows_to_table("sensordata", [{"tsp": "2026-01-01T00:00:05Z", "temperature": 3}]))
     await step("report_error_publish", lambda: ifl.report_error("Sensor timed out", level="warn", tsp="2026-01-01T00:00:00Z"))
     await step("report_error_append", lambda: ifl.report_error("Calibration failed", append=True, tsp="2026-01-01T00:00:00Z", user_message="Please recalibrate"))
     await step("get_history_full", lambda: ifl.getHistory("sensordata", {
@@ -74,7 +97,14 @@ async def main():
         return await put_then(fn)
 
     await step("files_get_inline", lambda: keep_files(lambda: f.get("a/b c.txt")))
+    # fleetfiles lists folder-style and refuses a prefix ending in "/" (INTERNAL).
     await step("files_list", lambda: keep_files(lambda: f.list(prefix="a/")))
+
+    async def list_root():
+        await f.put("top.txt", b"top", content_type="text/plain")
+        return await keep_files(lambda: f.list())
+
+    await step("files_list_root", list_root)
     await step("files_stat", lambda: keep_files(lambda: f.stat("a/b c.txt")))
     await step("files_exists_missing", lambda: f.exists("missing.txt"))
     await step("files_copy", lambda: keep_files(lambda: f.copy("a/b c.txt", "copy.txt", to_namespace="default")))
@@ -88,7 +118,8 @@ async def main():
 
     await step("files_get_direct", get_big)
     await step("files_usage_detail", lambda: f.usage(detail=True))
-    await step("files_share_url", lambda: f.share_url("a/b c.txt", ttl=120))
+    # files.read.url stats the object before it mints a URL.
+    await step("files_share_url", lambda: keep_files(lambda: f.share_url("a/b c.txt", ttl=120)))
     await step("files_upload_url", lambda: f.upload_url("u.bin", ttl=60, content_type="application/octet-stream", size=10))
     await step("files_delete", lambda: keep_files(lambda: f.delete("a/b c.txt")))
     await step("files_catalog", lambda: f.catalog(refresh=True))

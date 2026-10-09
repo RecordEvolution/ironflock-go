@@ -13,13 +13,14 @@
 # production roles. With ROUTER_IMAGE it is optional: by default it is copied
 # out of the image.
 #
-# PYTHON                    Python with autobahn, e.g. after `pip install
+# PYTHON                    Python 3.11+ with autobahn, e.g. after `pip install
 #                           ironflock` (default python3)
 # AUTH_MODE                 dynamic (default): production's dynamic WAMP-CRA;
 #                           the fake platform answers auth.userapp.authenticate
-#                           with the per-realm role (the per-app credential gets
+#                           as ironflock-auth does (the per-app credential gets
 #                           `app` on realm-2-26-dev, `app_reader` on
-#                           realm-2-77-dev). static: static users, one role on
+#                           realm-2-77-dev, and the session authid becomes the
+#                           device serial). static: static users, one role on
 #                           every realm.
 # IDENTITY_AUTHORIZER_MODE  enforce (default), or shadow: the identity callout
 #                           only logs its verdicts
@@ -56,7 +57,7 @@ else
 fi
 if [ -n "${ROUTER_REF_CONFIG:-}" ]; then
   [ -f "$ROUTER_REF_CONFIG" ] || die "ROUTER_REF_CONFIG: no such file: $ROUTER_REF_CONFIG"
-  ROUTER_REF_CONFIG="$(absolute "$ROUTER_REF_CONFIG")"
+  ROUTER_REF_CONFIG="$(absolute_file "$ROUTER_REF_CONFIG")" || die "cannot resolve ROUTER_REF_CONFIG: $ROUTER_REF_CONFIG"
 fi
 
 case "${AUTH_MODE:=dynamic}" in
@@ -84,6 +85,9 @@ if [ "$ROUTER_SOURCE" = image ]; then CONTAINER_NAME="ironflock-go-router-$ROUTE
 
 PY="$(absolute "${PYTHON:-python3}" 2>/dev/null || true)"
 [ -n "$PY" ] || die "python not found: set PYTHON"
+if ! "$PY" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+  die "$PY is older than Python 3.11, which autobahn (and ironflock-py) need: set PYTHON"
+fi
 if ! "$PY" -I -c 'import autobahn.asyncio, msgpack' 2>/dev/null; then
   die "$PY cannot import autobahn with msgpack support: pip install ironflock (or set PYTHON)"
 fi

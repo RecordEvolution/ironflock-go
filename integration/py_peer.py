@@ -5,7 +5,7 @@ Python SDK itself prints to stdout):
   call <device_key> <topic>   call a device function, print the result as JSON
   serve <topic>               register an echo device function, print READY,
                               serve until stdin closes
-  publish_table <table>       publish one row and one bulk batch to a table
+  publish_table <table>       publish one row and one bulk batch (with tsp) to a table
 """
 
 import asyncio
@@ -36,9 +36,11 @@ async def main():
             await asyncio.get_running_loop().run_in_executor(None, sys.stdin.read)
         elif mode == "publish_table":
             table = sys.argv[2]
-            await ifl.publish_to_table(table, {"temperature": 1.25, "source": "python"})
-            await ifl.publish_rows_to_table(table, [{"temperature": 2.5, "source": "python-bulk"},
-                                                    {"temperature": 3.75, "source": "python-bulk"}])
+            # fleetdb drops a row without tsp.
+            await ifl.publish_to_table(table, {"tsp": "2026-01-01T00:00:01Z", "temperature": 1.25, "source": "python"})
+            await ifl.publish_rows_to_table(table, [
+                {"tsp": "2026-01-01T00:00:02Z", "temperature": 2.5, "source": "python-bulk"},
+                {"tsp": "2026-01-01T00:00:03Z", "temperature": 3.75, "source": "python-bulk"}])
             print("RESULT:true", flush=True)
         else:
             raise SystemExit("unknown mode " + mode)

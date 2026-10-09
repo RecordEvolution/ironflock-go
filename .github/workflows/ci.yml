@@ -28,7 +28,7 @@ jobs:
           done
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         env:
           # golangci-lint v2.14 needs Go >= 1.26 to build, newer than go.mod's
           # go line; setup-go pins GOTOOLCHAIN=local, so let `go install` fetch
@@ -38,17 +38,57 @@ jobs:
           version: v2.14.0
           install-mode: goinstall
 
+  harness:
+    # The integration harness without a router (integration/README.md): the
+    # fake platform checked against the real services' contract tables, the
+    # harness scripts, and the fake platform starting up on the oldest and the
+    # newest supported Python.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Fake platform against the contract tables
+        run: python -I integration/test_fake_platform.py -v
+      - name: Harness scripts
+        run: integration/ironflock-router/test_scripts.sh
+      - name: Shellcheck
+        if: matrix.python == '3.14'
+        run: |
+          shellcheck -x --source-path=SCRIPTDIR integration/ironflock-router/*.sh integration/contracts/regen.sh
+      - name: Install the Python SDK (brings autobahn for the fake platform)
+        run: python -m pip install ironflock==1.9.0
+      - name: The fake platform starts
+        # No router: it keeps retrying the closed port. -W error turns the
+        # event-loop deprecation of Python 3.12/3.13 (an error on 3.14) into a
+        # failure.
+        run: |
+          FAKE_PLATFORM_ROUTER=ws://127.0.0.1:9/ws-svc FAKE_PLATFORM_S3_PORT=18999 \
+            python -I -W error::DeprecationWarning integration/fake_platform.py > fake_platform.log 2>&1 &
+          pid=$!
+          sleep 5
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat fake_platform.log
+            exit 1
+          fi
+          kill "$pid"
+
   integration:
     # End-to-end against the ironflock-router image and a fake IronFlock
     # platform (integration/README.md); the Python SDK's run of the same
     # scenario is the wire-level reference. Pulling the image from Artifact
     # Registry needs workload identity federation: the job runs once the
-    # GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT repository
+    # ROUTER_PULL_WIF_PROVIDER and ROUTER_PULL_SERVICE_ACCOUNT repository
     # variables are set (integration/README.md, "CI setup"), and only for
     # pushes and pull requests from this repository (fork pull requests get no
     # OIDC token).
     if: >-
-      vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != '' &&
+      vars.ROUTER_PULL_WIF_PROVIDER != '' && vars.ROUTER_PULL_SERVICE_ACCOUNT != '' &&
       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -73,8 +113,8 @@ jobs:
       - id: gcp
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.ROUTER_PULL_WIF_PROVIDER }}
+          service_account: ${{ vars.ROUTER_PULL_SERVICE_ACCOUNT }}
           token_format: access_token
           create_credentials_file: false
       - uses: docker/login-action@v4
@@ -106,7 +146,8 @@ jobs:
           IRONFLOCK_TEST_ENV_DIR: ${{ github.workspace }}/integration/ironflock-router/perapp_env
           IRONFLOCK_TEST_REFERENCE: ${{ runner.temp }}/py_reference.json
           IRONFLOCK_TEST_PYTHON: python
-          IRONFLOCK_TEST_RESTART_ROUTER: ${{ github.workspace }}/integration/ironflock-router/restart.sh
+          # Relative to integration/, where go test runs the test.
+          IRONFLOCK_TEST_RESTART_ROUTER: ironflock-router/restart.sh
         run: go test -tags integration -race -count=1 -v ./integration/...
       - name: Stop the harness
         if: always()

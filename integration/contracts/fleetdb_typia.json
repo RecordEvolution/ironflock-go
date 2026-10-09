@@ -1,0 +1,8906 @@
+{
+ "cases": [
+  {
+   "args": [
+    {
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/ok",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": null
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": null
+   },
+   "name": "table/limit_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": "x"
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": "x"
+   },
+   "name": "table/limit_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": -1
+   },
+   "name": "table/limit_neg",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 1.5
+   },
+   "name": "table/limit_frac",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": true
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": true
+   },
+   "name": "table/limit_bool",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": {}
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": {}
+   },
+   "name": "table/limit_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": [
+     1
+    ]
+   },
+   "name": "table/limit_list",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 4294967296
+   },
+   "name": "table/limit_big",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10.0
+    }
+   ],
+   "error": null,
+   "name": "table/limit_float_int",
+   "type": "table"
+  },
+  {
+   "args": [
+    {}
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Maximum<10000>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "table/limit_missing",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 0
+    }
+   ],
+   "error": null,
+   "name": "table/limit_0",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "table/limit_1",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 100
+    }
+   ],
+   "error": null,
+   "name": "table/limit_100",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 101
+    }
+   ],
+   "error": null,
+   "name": "table/limit_101",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10000
+    }
+   ],
+   "error": null,
+   "name": "table/limit_10000",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10001
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<10000>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10001
+   },
+   "name": "table/limit_10001",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": null
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": null
+   },
+   "name": "table/offset_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": "x"
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": "x"
+   },
+   "name": "table/offset_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": -1
+   },
+   "name": "table/offset_neg",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 1.5
+   },
+   "name": "table/offset_frac",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": true
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": true
+   },
+   "name": "table/offset_bool",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": {}
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": {}
+   },
+   "name": "table/offset_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": [
+     1
+    ]
+   },
+   "name": "table/offset_list",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 4294967296
+   },
+   "name": "table/offset_big",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": 10.0
+    }
+   ],
+   "error": null,
+   "name": "table/offset_float_int",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "offset": 3
+    }
+   ],
+   "error": null,
+   "name": "table/offset_3",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": null
+    }
+   ],
+   "error": null,
+   "name": "table/timeRange_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "table/timeRange_iso",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      null,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "table/timeRange_nulls",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      1,
+      2
+     ]
+    }
+   ],
+   "error": null,
+   "name": "table/timeRange_nums",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      1,
+      "a"
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     "a"
+    ]
+   },
+   "name": "table/timeRange_mixed",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1
+    ]
+   },
+   "name": "table/timeRange_one",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      1,
+      2,
+      3
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     2,
+     3
+    ]
+   },
+   "name": "table/timeRange_three",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": "x"
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": "x"
+   },
+   "name": "table/timeRange_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": {}
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": {}
+   },
+   "name": "table/timeRange_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      true,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     true,
+     null
+    ]
+   },
+   "name": "table/timeRange_bool",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": []
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": []
+   },
+   "name": "table/timeRange_empty",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": null,
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_none",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": "x",
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<SQLFilterAnd> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd",
+    "value": "x"
+   },
+   "name": "table/filterAnd_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      1
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": 1
+   },
+   "name": "table/filterAnd_list_num",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      "x"
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": "x"
+   },
+   "name": "table/filterAnd_list_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      null
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": null
+   },
+   "name": "table/filterAnd_list_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {}
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "table/filterAnd_empty_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")` typed value next time.",
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator"
+   },
+   "name": "table/filterAnd_col_only",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "like",
+       "value": "%x%"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "like"
+   },
+   "name": "table/filterAnd_lower_op",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": null
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "table/filterAnd_val_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "operator": "="
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "table/filterAnd_col_num",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_ok_eq",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        "a",
+        true
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_ok_in",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        [
+         1
+        ]
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[0]",
+    "value": [
+     1
+    ]
+   },
+   "name": "table/filterAnd_in_nested",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        null
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[1]",
+    "value": null
+   },
+   "name": "table/filterAnd_in_null_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": {
+        "a": 1
+       }
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": {
+     "a": 1
+    }
+   },
+   "name": "table/filterAnd_val_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": 1,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].dataType",
+    "value": 1
+   },
+   "name": "table/filterAnd_datatype_num",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": "true",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "true"
+   },
+   "name": "table/filterAnd_latest_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": false,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_latest_false",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_marker",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": "string",
+       "latest": true,
+       "operator": "=",
+       "value": "x"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_marker_full",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "operator": "eq"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\" | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "eq"
+   },
+   "name": "table/filterAnd_marker_badop",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": null
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "table/filterAnd_marker_val_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": [
+        1
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": [
+     1
+    ]
+   },
+   "name": "table/filterAnd_marker_val_list",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "latest": true
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "table/filterAnd_marker_col_num",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "OR",
+       "filters": [
+        {
+         "column": "a",
+         "operator": "=",
+         "value": 1
+        },
+        {
+         "latest": true
+        }
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_group_ok",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `Array<SQLFilterAnd>` typed value next time.",
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters"
+   },
+   "name": "table/filterAnd_group_nofilters",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": "x"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": "x"
+   },
+   "name": "table/filterAnd_group_filters_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        1
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0]",
+    "value": 1
+   },
+   "name": "table/filterAnd_group_filters_num",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        {
+         "combinator": "OR",
+         "filters": [
+          {
+           "column": "a",
+           "operator": "~"
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0].filters[0].operator",
+    "value": "~"
+   },
+   "name": "table/filterAnd_group_nested_bad",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": "a"
+   },
+   "name": "table/filterAnd_group_with_col",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": null,
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": null
+   },
+   "name": "table/filterAnd_group_with_col_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "operator": "="
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "="
+   },
+   "name": "table/filterAnd_group_with_op",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": true
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_group_latest_true",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": "x"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "x"
+   },
+   "name": "table/filterAnd_group_latest_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "and",
+       "filters": []
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "table/filterAnd_group_lower",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": [],
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": []
+   },
+   "name": "table/filterAnd_pred_with_filters",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].combinator",
+    "value": null
+   },
+   "name": "table/filterAnd_pred_with_comb_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": null
+   },
+   "name": "table/filterAnd_pred_with_filters_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IS NULL"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/filterAnd_pred_isnull",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      [
+       1
+      ]
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "table/filterAnd_list_in_list",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      },
+      {
+       "column": "b",
+       "operator": "?"
+      }
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[1].operator",
+    "value": "?"
+   },
+   "name": "table/filterAnd_second_bad",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columns": null,
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/columns_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columns": "a",
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": "a"
+   },
+   "name": "table/columns_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      1
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columns[1]",
+    "value": 1
+   },
+   "name": "table/columns_num_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      "b"
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/columns_ok",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columns": {},
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": {}
+   },
+   "name": "table/columns_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": null,
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/columnPaths_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": "a",
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": "a"
+   },
+   "name": "table/columnPaths_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      1
+     ],
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths[1]",
+    "value": 1
+   },
+   "name": "table/columnPaths_num_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      "b"
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/columnPaths_ok",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": {},
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": {}
+   },
+   "name": "table/columnPaths_obj",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "groupBy": null,
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/groupBy_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "groupBy": "a",
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/groupBy_str",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      1
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/groupBy_num_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      "b"
+     ],
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/groupBy_ok",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "groupBy": {},
+     "limit": 10
+    }
+   ],
+   "error": null,
+   "name": "table/groupBy_obj",
+   "type": "table"
+  },
+  {
+   "args": {},
+   "error": {
+    "expected": "TableQueryArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": {}
+   },
+   "name": "table/args_obj",
+   "type": "table"
+  },
+  {
+   "args": "x",
+   "error": {
+    "expected": "TableQueryArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": "x"
+   },
+   "name": "table/args_str",
+   "type": "table"
+  },
+  {
+   "args": [],
+   "error": {
+    "expected": "[TableQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": []
+   },
+   "name": "table/args_empty",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10
+    },
+    {
+     "limit": 10
+    }
+   ],
+   "error": {
+    "expected": "[TableQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 10
+     },
+     {
+      "limit": 10
+     }
+    ]
+   },
+   "name": "table/args_two",
+   "type": "table"
+  },
+  {
+   "args": [
+    null
+   ],
+   "error": {
+    "expected": "TableQueryParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": null
+   },
+   "name": "table/args_null",
+   "type": "table"
+  },
+  {
+   "args": [
+    "x"
+   ],
+   "error": {
+    "expected": "TableQueryParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": "x"
+   },
+   "name": "table/args_str_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    [
+     1
+    ]
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Maximum<10000>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "table/args_list_elem",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10
+    },
+    {}
+   ],
+   "error": {
+    "expected": "[TableQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 10
+     },
+     {}
+    ]
+   },
+   "name": "table/args_kwargs_like",
+   "type": "table"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/ok",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": null,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": null
+   },
+   "name": "series/limit_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": "x",
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": "x"
+   },
+   "name": "series/limit_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": -1,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": -1
+   },
+   "name": "series/limit_neg",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 1.5,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 1.5
+   },
+   "name": "series/limit_frac",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": true,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": true
+   },
+   "name": "series/limit_bool",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": {},
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": {}
+   },
+   "name": "series/limit_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": [
+      1
+     ],
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": [
+     1
+    ]
+   },
+   "name": "series/limit_list",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 4294967296,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 4294967296
+   },
+   "name": "series/limit_big",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10.0,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/limit_float_int",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<10000>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "series/limit_missing",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 0,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Minimum<1>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 0
+   },
+   "name": "series/limit_0",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/limit_1",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 100,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/limit_100",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 101,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/limit_101",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10000,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/limit_10000",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10001,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<10000>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10001
+   },
+   "name": "series/limit_10001",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": null,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": "x",
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": -1,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_neg",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": 1.5,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_frac",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": true,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_bool",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": {},
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": [
+      1
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_list",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": 4294967296,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_big",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": 10.0,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_float_int",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "offset": 3,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/offset_3",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": null
+    }
+   ],
+   "error": null,
+   "name": "series/timeRange_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/timeRange_iso",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      null,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/timeRange_nulls",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      2
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/timeRange_nums",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      "a"
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     "a"
+    ]
+   },
+   "name": "series/timeRange_mixed",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1
+    ]
+   },
+   "name": "series/timeRange_one",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      2,
+      3
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     2,
+     3
+    ]
+   },
+   "name": "series/timeRange_three",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": "x"
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": "x"
+   },
+   "name": "series/timeRange_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": {}
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": {}
+   },
+   "name": "series/timeRange_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      true,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     true,
+     null
+    ]
+   },
+   "name": "series/timeRange_bool",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": []
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": []
+   },
+   "name": "series/timeRange_empty",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": null,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_none",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": "x",
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<SQLFilterAnd> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd",
+    "value": "x"
+   },
+   "name": "series/filterAnd_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      1
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": 1
+   },
+   "name": "series/filterAnd_list_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      "x"
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": "x"
+   },
+   "name": "series/filterAnd_list_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      null
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": null
+   },
+   "name": "series/filterAnd_list_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {}
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "series/filterAnd_empty_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")` typed value next time.",
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator"
+   },
+   "name": "series/filterAnd_col_only",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "like",
+       "value": "%x%"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "like"
+   },
+   "name": "series/filterAnd_lower_op",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": null
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "series/filterAnd_val_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "operator": "="
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "series/filterAnd_col_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_ok_eq",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        "a",
+        true
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_ok_in",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        [
+         1
+        ]
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[0]",
+    "value": [
+     1
+    ]
+   },
+   "name": "series/filterAnd_in_nested",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        null
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[1]",
+    "value": null
+   },
+   "name": "series/filterAnd_in_null_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": {
+        "a": 1
+       }
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": {
+     "a": 1
+    }
+   },
+   "name": "series/filterAnd_val_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": 1,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].dataType",
+    "value": 1
+   },
+   "name": "series/filterAnd_datatype_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": "true",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "true"
+   },
+   "name": "series/filterAnd_latest_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": false,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_latest_false",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_marker",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": "string",
+       "latest": true,
+       "operator": "=",
+       "value": "x"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_marker_full",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "operator": "eq"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\" | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "eq"
+   },
+   "name": "series/filterAnd_marker_badop",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": null
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "series/filterAnd_marker_val_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": [
+        1
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": [
+     1
+    ]
+   },
+   "name": "series/filterAnd_marker_val_list",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "latest": true
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "series/filterAnd_marker_col_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "OR",
+       "filters": [
+        {
+         "column": "a",
+         "operator": "=",
+         "value": 1
+        },
+        {
+         "latest": true
+        }
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_group_ok",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `Array<SQLFilterAnd>` typed value next time.",
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters"
+   },
+   "name": "series/filterAnd_group_nofilters",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": "x"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": "x"
+   },
+   "name": "series/filterAnd_group_filters_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        1
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0]",
+    "value": 1
+   },
+   "name": "series/filterAnd_group_filters_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        {
+         "combinator": "OR",
+         "filters": [
+          {
+           "column": "a",
+           "operator": "~"
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0].filters[0].operator",
+    "value": "~"
+   },
+   "name": "series/filterAnd_group_nested_bad",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": "a"
+   },
+   "name": "series/filterAnd_group_with_col",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": null,
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": null
+   },
+   "name": "series/filterAnd_group_with_col_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "operator": "="
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "="
+   },
+   "name": "series/filterAnd_group_with_op",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": true
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_group_latest_true",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": "x"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "x"
+   },
+   "name": "series/filterAnd_group_latest_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "and",
+       "filters": []
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "series/filterAnd_group_lower",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": [],
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": []
+   },
+   "name": "series/filterAnd_pred_with_filters",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].combinator",
+    "value": null
+   },
+   "name": "series/filterAnd_pred_with_comb_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": null
+   },
+   "name": "series/filterAnd_pred_with_filters_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IS NULL"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/filterAnd_pred_isnull",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      [
+       1
+      ]
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "series/filterAnd_list_in_list",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      },
+      {
+       "column": "b",
+       "operator": "?"
+      }
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[1].operator",
+    "value": "?"
+   },
+   "name": "series/filterAnd_second_bad",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columns": null,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columns_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columns": "a",
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columns_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      1
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columns_num_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      "b"
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columns_ok",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columns": {},
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columns_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": null,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columnPaths_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": "a",
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columnPaths_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      1
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columnPaths_num_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      "b"
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columnPaths_ok",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": {},
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/columnPaths_obj",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": null,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/groupBy_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": "a",
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].groupBy",
+    "value": "a"
+   },
+   "name": "series/groupBy_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      1
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].groupBy[1]",
+    "value": 1
+   },
+   "name": "series/groupBy_num_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      "b"
+     ],
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/groupBy_ok",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": {},
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].groupBy",
+    "value": {}
+   },
+   "name": "series/groupBy_obj",
+   "type": "series"
+  },
+  {
+   "args": {},
+   "error": {
+    "expected": "SeriesQueryArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": {}
+   },
+   "name": "series/args_obj",
+   "type": "series"
+  },
+  {
+   "args": "x",
+   "error": {
+    "expected": "SeriesQueryArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": "x"
+   },
+   "name": "series/args_str",
+   "type": "series"
+  },
+  {
+   "args": [],
+   "error": {
+    "expected": "[SeriesQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": []
+   },
+   "name": "series/args_empty",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    },
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "[SeriesQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 10,
+      "metrics": [
+       {
+        "method": "AVG",
+        "ref": "t"
+       }
+      ],
+      "timeRange": [
+       1,
+       null
+      ]
+     },
+     {
+      "limit": 10,
+      "metrics": [
+       {
+        "method": "AVG",
+        "ref": "t"
+       }
+      ],
+      "timeRange": [
+       1,
+       null
+      ]
+     }
+    ]
+   },
+   "name": "series/args_two",
+   "type": "series"
+  },
+  {
+   "args": [
+    null
+   ],
+   "error": {
+    "expected": "SeriesQueryParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": null
+   },
+   "name": "series/args_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    "x"
+   ],
+   "error": {
+    "expected": "SeriesQueryParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": "x"
+   },
+   "name": "series/args_str_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    [
+     1
+    ]
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(Array<SeriesMetric> & MinItems<1>)` typed value next time.",
+    "expected": "(Array<SeriesMetric> & MinItems<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].metrics"
+   },
+   "name": "series/args_list_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    },
+    {}
+   ],
+   "error": {
+    "expected": "[SeriesQueryParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 10,
+      "metrics": [
+       {
+        "method": "AVG",
+        "ref": "t"
+       }
+      ],
+      "timeRange": [
+       1,
+       null
+      ]
+     },
+     {}
+    ]
+   },
+   "name": "series/args_kwargs_like",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/ok",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": null
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": null
+   },
+   "name": "reveal/limit_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": "x"
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": "x"
+   },
+   "name": "reveal/limit_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": -1
+   },
+   "name": "reveal/limit_neg",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 1.5
+   },
+   "name": "reveal/limit_frac",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": true
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": true
+   },
+   "name": "reveal/limit_bool",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": {}
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": {}
+   },
+   "name": "reveal/limit_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": [
+     1
+    ]
+   },
+   "name": "reveal/limit_list",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 4294967296
+   },
+   "name": "reveal/limit_big",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 10.0
+    }
+   ],
+   "error": null,
+   "name": "reveal/limit_float_int",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {}
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "reveal/limit_missing",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 0
+    }
+   ],
+   "error": {
+    "expected": "number & Minimum<1>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 0
+   },
+   "name": "reveal/limit_0",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/limit_1",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 100
+    }
+   ],
+   "error": null,
+   "name": "reveal/limit_100",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 101
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 101
+   },
+   "name": "reveal/limit_101",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 10000
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10000
+   },
+   "name": "reveal/limit_10000",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 10001
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10001
+   },
+   "name": "reveal/limit_10001",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": null
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": null
+   },
+   "name": "reveal/offset_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": "x"
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": "x"
+   },
+   "name": "reveal/offset_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": -1
+   },
+   "name": "reveal/offset_neg",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 1.5
+   },
+   "name": "reveal/offset_frac",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": true
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": true
+   },
+   "name": "reveal/offset_bool",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": {}
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": {}
+   },
+   "name": "reveal/offset_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": [
+     1
+    ]
+   },
+   "name": "reveal/offset_list",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 4294967296
+   },
+   "name": "reveal/offset_big",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": 10.0
+    }
+   ],
+   "error": null,
+   "name": "reveal/offset_float_int",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "offset": 3
+    }
+   ],
+   "error": null,
+   "name": "reveal/offset_3",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": null
+    }
+   ],
+   "error": null,
+   "name": "reveal/timeRange_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "reveal/timeRange_iso",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      null,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "reveal/timeRange_nulls",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      1,
+      2
+     ]
+    }
+   ],
+   "error": null,
+   "name": "reveal/timeRange_nums",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      1,
+      "a"
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     "a"
+    ]
+   },
+   "name": "reveal/timeRange_mixed",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1
+    ]
+   },
+   "name": "reveal/timeRange_one",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      1,
+      2,
+      3
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     2,
+     3
+    ]
+   },
+   "name": "reveal/timeRange_three",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": "x"
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": "x"
+   },
+   "name": "reveal/timeRange_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": {}
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": {}
+   },
+   "name": "reveal/timeRange_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": [
+      true,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     true,
+     null
+    ]
+   },
+   "name": "reveal/timeRange_bool",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1,
+     "timeRange": []
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": []
+   },
+   "name": "reveal/timeRange_empty",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_none",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": "x",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<SQLFilterAnd> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd",
+    "value": "x"
+   },
+   "name": "reveal/filterAnd_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": 1
+   },
+   "name": "reveal/filterAnd_list_num",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      "x"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": "x"
+   },
+   "name": "reveal/filterAnd_list_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      null
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": null
+   },
+   "name": "reveal/filterAnd_list_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {}
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "reveal/filterAnd_empty_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")` typed value next time.",
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator"
+   },
+   "name": "reveal/filterAnd_col_only",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "like",
+       "value": "%x%"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "like"
+   },
+   "name": "reveal/filterAnd_lower_op",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": null
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "reveal/filterAnd_val_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "operator": "="
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "reveal/filterAnd_col_num",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_ok_eq",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        "a",
+        true
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_ok_in",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        [
+         1
+        ]
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[0]",
+    "value": [
+     1
+    ]
+   },
+   "name": "reveal/filterAnd_in_nested",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        null
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[1]",
+    "value": null
+   },
+   "name": "reveal/filterAnd_in_null_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": {
+        "a": 1
+       }
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": {
+     "a": 1
+    }
+   },
+   "name": "reveal/filterAnd_val_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": 1,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].dataType",
+    "value": 1
+   },
+   "name": "reveal/filterAnd_datatype_num",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": "true",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "true"
+   },
+   "name": "reveal/filterAnd_latest_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": false,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_latest_false",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_marker",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": "string",
+       "latest": true,
+       "operator": "=",
+       "value": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_marker_full",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "operator": "eq"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\" | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "eq"
+   },
+   "name": "reveal/filterAnd_marker_badop",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": null
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "reveal/filterAnd_marker_val_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": [
+        1
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": [
+     1
+    ]
+   },
+   "name": "reveal/filterAnd_marker_val_list",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": 1,
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "reveal/filterAnd_marker_col_num",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "OR",
+       "filters": [
+        {
+         "column": "a",
+         "operator": "=",
+         "value": 1
+        },
+        {
+         "latest": true
+        }
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_group_ok",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `Array<SQLFilterAnd>` typed value next time.",
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters"
+   },
+   "name": "reveal/filterAnd_group_nofilters",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": "x"
+   },
+   "name": "reveal/filterAnd_group_filters_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        1
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0]",
+    "value": 1
+   },
+   "name": "reveal/filterAnd_group_filters_num",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        {
+         "combinator": "OR",
+         "filters": [
+          {
+           "column": "a",
+           "operator": "~"
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0].filters[0].operator",
+    "value": "~"
+   },
+   "name": "reveal/filterAnd_group_nested_bad",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": "a"
+   },
+   "name": "reveal/filterAnd_group_with_col",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": null,
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": null
+   },
+   "name": "reveal/filterAnd_group_with_col_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "operator": "="
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "="
+   },
+   "name": "reveal/filterAnd_group_with_op",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_group_latest_true",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "x"
+   },
+   "name": "reveal/filterAnd_group_latest_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "combinator": "and",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "reveal/filterAnd_group_lower",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": [],
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": []
+   },
+   "name": "reveal/filterAnd_pred_with_filters",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].combinator",
+    "value": null
+   },
+   "name": "reveal/filterAnd_pred_with_comb_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": null
+   },
+   "name": "reveal/filterAnd_pred_with_filters_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IS NULL"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/filterAnd_pred_isnull",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      [
+       1
+      ]
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "reveal/filterAnd_list_in_list",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      },
+      {
+       "column": "b",
+       "operator": "?"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[1].operator",
+    "value": "?"
+   },
+   "name": "reveal/filterAnd_second_bad",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columns": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/columns_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columns": "a",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": "a"
+   },
+   "name": "reveal/columns_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columns[1]",
+    "value": 1
+   },
+   "name": "reveal/columns_num_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columns": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/columns_ok",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columns": {},
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": {}
+   },
+   "name": "reveal/columns_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/columnPaths_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": "a",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": "a"
+   },
+   "name": "reveal/columnPaths_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths[1]",
+    "value": 1
+   },
+   "name": "reveal/columnPaths_num_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/columnPaths_ok",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "columnPaths": {},
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": {}
+   },
+   "name": "reveal/columnPaths_obj",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "groupBy": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/groupBy_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "groupBy": "a",
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/groupBy_str",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/groupBy_num_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/groupBy_ok",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "groupBy": {},
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "reveal/groupBy_obj",
+   "type": "reveal"
+  },
+  {
+   "args": {},
+   "error": {
+    "expected": "SecretRevealArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": {}
+   },
+   "name": "reveal/args_obj",
+   "type": "reveal"
+  },
+  {
+   "args": "x",
+   "error": {
+    "expected": "SecretRevealArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": "x"
+   },
+   "name": "reveal/args_str",
+   "type": "reveal"
+  },
+  {
+   "args": [],
+   "error": {
+    "expected": "[SecretQuerySelector]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": []
+   },
+   "name": "reveal/args_empty",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1
+    },
+    {
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "[SecretQuerySelector]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 1
+     },
+     {
+      "limit": 1
+     }
+    ]
+   },
+   "name": "reveal/args_two",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    null
+   ],
+   "error": {
+    "expected": "SecretQuerySelector",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": null
+   },
+   "name": "reveal/args_null",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    "x"
+   ],
+   "error": {
+    "expected": "SecretQuerySelector",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": "x"
+   },
+   "name": "reveal/args_str_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    [
+     1
+    ]
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "reveal/args_list_elem",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "limit": 1
+    },
+    {}
+   ],
+   "error": {
+    "expected": "[SecretQuerySelector]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "limit": 1
+     },
+     {}
+    ]
+   },
+   "name": "reveal/args_kwargs_like",
+   "type": "reveal"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/ok",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": null
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": null
+   },
+   "name": "verify/limit_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": "x"
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": "x"
+   },
+   "name": "verify/limit_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": -1
+   },
+   "name": "verify/limit_neg",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 1.5
+   },
+   "name": "verify/limit_frac",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": true
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": true
+   },
+   "name": "verify/limit_bool",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": {}
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": {}
+   },
+   "name": "verify/limit_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": [
+     1
+    ]
+   },
+   "name": "verify/limit_list",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 4294967296
+   },
+   "name": "verify/limit_big",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 10.0
+    }
+   ],
+   "error": null,
+   "name": "verify/limit_float_int",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key"
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "verify/limit_missing",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 0
+    }
+   ],
+   "error": {
+    "expected": "number & Minimum<1>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 0
+   },
+   "name": "verify/limit_0",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/limit_1",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 100
+    }
+   ],
+   "error": null,
+   "name": "verify/limit_100",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 101
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 101
+   },
+   "name": "verify/limit_101",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 10000
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10000
+   },
+   "name": "verify/limit_10000",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 10001
+    }
+   ],
+   "error": {
+    "expected": "number & Maximum<100>",
+    "method": "typia.assert",
+    "path": "$input[0].limit",
+    "value": 10001
+   },
+   "name": "verify/limit_10001",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": null
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": null
+   },
+   "name": "verify/offset_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": "x"
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": "x"
+   },
+   "name": "verify/offset_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": -1
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": -1
+   },
+   "name": "verify/offset_neg",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": 1.5
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 1.5
+   },
+   "name": "verify/offset_frac",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": true
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": true
+   },
+   "name": "verify/offset_bool",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": {}
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": {}
+   },
+   "name": "verify/offset_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "((number & Type<\"uint32\">) | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": [
+     1
+    ]
+   },
+   "name": "verify/offset_list",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": 4294967296
+    }
+   ],
+   "error": {
+    "expected": "number & Type<\"uint32\">",
+    "method": "typia.assert",
+    "path": "$input[0].offset",
+    "value": 4294967296
+   },
+   "name": "verify/offset_big",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": 10.0
+    }
+   ],
+   "error": null,
+   "name": "verify/offset_float_int",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "offset": 3
+    }
+   ],
+   "error": null,
+   "name": "verify/offset_3",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": null
+    }
+   ],
+   "error": null,
+   "name": "verify/timeRange_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "verify/timeRange_iso",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      null,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "verify/timeRange_nulls",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      1,
+      2
+     ]
+    }
+   ],
+   "error": null,
+   "name": "verify/timeRange_nums",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      1,
+      "a"
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     "a"
+    ]
+   },
+   "name": "verify/timeRange_mixed",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      1
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1
+    ]
+   },
+   "name": "verify/timeRange_one",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      1,
+      2,
+      3
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     1,
+     2,
+     3
+    ]
+   },
+   "name": "verify/timeRange_three",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": "x"
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": "x"
+   },
+   "name": "verify/timeRange_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": {}
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": {}
+   },
+   "name": "verify/timeRange_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": [
+      true,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": [
+     true,
+     null
+    ]
+   },
+   "name": "verify/timeRange_bool",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1,
+     "timeRange": []
+    }
+   ],
+   "error": {
+    "expected": "(ISOTimeRange | TimeRange)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange",
+    "value": []
+   },
+   "name": "verify/timeRange_empty",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_none",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": "x",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<SQLFilterAnd> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd",
+    "value": "x"
+   },
+   "name": "verify/filterAnd_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": 1
+   },
+   "name": "verify/filterAnd_list_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      "x"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": "x"
+   },
+   "name": "verify/filterAnd_list_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      null
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0]",
+    "value": null
+   },
+   "name": "verify/filterAnd_list_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {}
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "verify/filterAnd_empty_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")` typed value next time.",
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator"
+   },
+   "name": "verify/filterAnd_col_only",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "like",
+       "value": "%x%"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "like"
+   },
+   "name": "verify/filterAnd_lower_op",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": null
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "verify/filterAnd_val_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": 1,
+       "operator": "="
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "verify/filterAnd_col_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_ok_eq",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        "a",
+        true
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_ok_in",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        [
+         1
+        ]
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[0]",
+    "value": [
+     1
+    ]
+   },
+   "name": "verify/filterAnd_in_nested",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IN",
+       "value": [
+        1,
+        null
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value[1]",
+    "value": null
+   },
+   "name": "verify/filterAnd_in_null_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": {
+        "a": 1
+       }
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string | number | boolean> | boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": {
+     "a": 1
+    }
+   },
+   "name": "verify/filterAnd_val_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": 1,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].dataType",
+    "value": 1
+   },
+   "name": "verify/filterAnd_datatype_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": "true",
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "true"
+   },
+   "name": "verify/filterAnd_latest_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "latest": false,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_latest_false",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_marker",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "dataType": "string",
+       "latest": true,
+       "operator": "=",
+       "value": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_marker_full",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "latest": true,
+       "operator": "eq"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\" | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "eq"
+   },
+   "name": "verify/filterAnd_marker_badop",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": null
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": null
+   },
+   "name": "verify/filterAnd_marker_val_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "latest": true,
+       "value": [
+        1
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(boolean | number | string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].value",
+    "value": [
+     1
+    ]
+   },
+   "name": "verify/filterAnd_marker_val_list",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": 1,
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": 1
+   },
+   "name": "verify/filterAnd_marker_col_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "OR",
+       "filters": [
+        {
+         "column": "a",
+         "operator": "=",
+         "value": 1
+        },
+        {
+         "latest": true
+        }
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_group_ok",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `Array<SQLFilterAnd>` typed value next time.",
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters"
+   },
+   "name": "verify/filterAnd_group_nofilters",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "Array<SQLFilterAnd>",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": "x"
+   },
+   "name": "verify/filterAnd_group_filters_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        1
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(SQLFilterGroup | SQLFilterLatestMarker | SQLFilterPredicate)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0]",
+    "value": 1
+   },
+   "name": "verify/filterAnd_group_filters_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [
+        {
+         "combinator": "OR",
+         "filters": [
+          {
+           "column": "a",
+           "operator": "~"
+          }
+         ]
+        }
+       ]
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters[0].filters[0].operator",
+    "value": "~"
+   },
+   "name": "verify/filterAnd_group_nested_bad",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": "a"
+   },
+   "name": "verify/filterAnd_group_with_col",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": null,
+       "combinator": "AND",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column",
+    "value": null
+   },
+   "name": "verify/filterAnd_group_with_col_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "operator": "="
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].operator",
+    "value": "="
+   },
+   "name": "verify/filterAnd_group_with_op",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": true
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_group_latest_true",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "AND",
+       "filters": [],
+       "latest": "x"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(false | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].latest",
+    "value": "x"
+   },
+   "name": "verify/filterAnd_group_latest_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "combinator": "and",
+       "filters": []
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "verify/filterAnd_group_lower",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": [],
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": []
+   },
+   "name": "verify/filterAnd_pred_with_filters",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "combinator": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].combinator",
+    "value": null
+   },
+   "name": "verify/filterAnd_pred_with_comb_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "filters": null,
+       "operator": "=",
+       "value": 1
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "undefined",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].filters",
+    "value": null
+   },
+   "name": "verify/filterAnd_pred_with_filters_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "IS NULL"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/filterAnd_pred_isnull",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      [
+       1
+      ]
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[0].column"
+   },
+   "name": "verify/filterAnd_list_in_list",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "filterAnd": [
+      {
+       "column": "a",
+       "operator": "=",
+       "value": 1
+      },
+      {
+       "column": "b",
+       "operator": "?"
+      }
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(\"!=\" | \"<\" | \"<=\" | \"<>\" | \"=\" | \">\" | \">=\" | \"ILIKE\" | \"IN\" | \"IS NOT NULL\" | \"IS NULL\" | \"LIKE\" | \"NOT ILIKE\" | \"NOT IN\" | \"NOT LIKE\")",
+    "method": "typia.assert",
+    "path": "$input[0].filterAnd[1].operator",
+    "value": "?"
+   },
+   "name": "verify/filterAnd_second_bad",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columns": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/columns_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columns": "a",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": "a"
+   },
+   "name": "verify/columns_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columns": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columns[1]",
+    "value": 1
+   },
+   "name": "verify/columns_num_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columns": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/columns_ok",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columns": {},
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columns",
+    "value": {}
+   },
+   "name": "verify/columns_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columnPaths": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/columnPaths_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columnPaths": "a",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": "a"
+   },
+   "name": "verify/columnPaths_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columnPaths": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths[1]",
+    "value": 1
+   },
+   "name": "verify/columnPaths_num_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columnPaths": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/columnPaths_ok",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "columnPaths": {},
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(Array<string> | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].columnPaths",
+    "value": {}
+   },
+   "name": "verify/columnPaths_obj",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "groupBy": null,
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/groupBy_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "groupBy": "a",
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/groupBy_str",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "groupBy": [
+      "a",
+      1
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/groupBy_num_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "groupBy": [
+      "a",
+      "b"
+     ],
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/groupBy_ok",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "groupBy": {},
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/groupBy_obj",
+   "type": "verify"
+  },
+  {
+   "args": {},
+   "error": {
+    "expected": "SecretVerifyArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": {}
+   },
+   "name": "verify/args_obj",
+   "type": "verify"
+  },
+  {
+   "args": "x",
+   "error": {
+    "expected": "SecretVerifyArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": "x"
+   },
+   "name": "verify/args_str",
+   "type": "verify"
+  },
+  {
+   "args": [],
+   "error": {
+    "expected": "[SecretVerifyParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": []
+   },
+   "name": "verify/args_empty",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1
+    },
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "[SecretVerifyParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "candidate": "x",
+      "column": "api_key",
+      "limit": 1
+     },
+     {
+      "candidate": "x",
+      "column": "api_key",
+      "limit": 1
+     }
+    ]
+   },
+   "name": "verify/args_two",
+   "type": "verify"
+  },
+  {
+   "args": [
+    null
+   ],
+   "error": {
+    "expected": "SecretVerifyParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": null
+   },
+   "name": "verify/args_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    "x"
+   ],
+   "error": {
+    "expected": "SecretVerifyParams",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": "x"
+   },
+   "name": "verify/args_str_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    [
+     1
+    ]
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)` typed value next time.",
+    "expected": "(number & Type<\"uint32\"> & Minimum<1> & Maximum<100>)",
+    "method": "typia.assert",
+    "path": "$input[0].limit"
+   },
+   "name": "verify/args_list_elem",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "api_key",
+     "limit": 1
+    },
+    {}
+   ],
+   "error": {
+    "expected": "[SecretVerifyParams]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "candidate": "x",
+      "column": "api_key",
+      "limit": 1
+     },
+     {}
+    ]
+   },
+   "name": "verify/args_kwargs_like",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(Array<SeriesMetric> & MinItems<1>)` typed value next time.",
+    "expected": "(Array<SeriesMetric> & MinItems<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].metrics"
+   },
+   "name": "series/metrics_missing",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "Array<> & MinItems<1>",
+    "method": "typia.assert",
+    "path": "$input[0].metrics",
+    "value": []
+   },
+   "name": "series/metrics_empty",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": "temperature",
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(Array<SeriesMetric> & MinItems<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].metrics",
+    "value": "temperature"
+   },
+   "name": "series/metrics_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      "temperature"
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "SeriesMetric",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0]",
+    "value": "temperature"
+   },
+   "name": "series/metrics_old_shape",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(\"AVG\" | \"COUNT\" | \"FIRST\" | \"LAST\" | \"MAX\" | \"MIN\" | \"SUM\")` typed value next time.",
+    "expected": "(\"AVG\" | \"COUNT\" | \"FIRST\" | \"LAST\" | \"MAX\" | \"MIN\" | \"SUM\")",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0].method"
+   },
+   "name": "series/metrics_no_method",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "avg",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"AVG\" | \"COUNT\" | \"FIRST\" | \"LAST\" | \"MAX\" | \"MIN\" | \"SUM\")",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0].method",
+    "value": "avg"
+   },
+   "name": "series/metrics_lower_method",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": 1
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0].ref",
+    "value": 1
+   },
+   "name": "series/metrics_ref_num",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      },
+      {
+       "method": "COUNT",
+       "ref": "u"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/metrics_two",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      },
+      {
+       "method": "MEDIAN",
+       "ref": "u"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "(\"AVG\" | \"COUNT\" | \"FIRST\" | \"LAST\" | \"MAX\" | \"MIN\" | \"SUM\")",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[1].method",
+    "value": "MEDIAN"
+   },
+   "name": "series/metrics_second_bad",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      null
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "SeriesMetric",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0]",
+    "value": null
+   },
+   "name": "series/metrics_null_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      [
+       1
+      ]
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0].ref"
+   },
+   "name": "series/metrics_list_elem",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ]
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(ISOTimeRange | TimeRange | null)` typed value next time.",
+    "expected": "(ISOTimeRange | TimeRange | null)",
+    "method": "typia.assert",
+    "path": "$input[0].timeRange"
+   },
+   "name": "series/timeRange_missing",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": 999,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Minimum<1000>",
+    "method": "typia.assert",
+    "path": "$input[0].bucketMs",
+    "value": 999
+   },
+   "name": "series/bucketMs_999",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": 1000,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/bucketMs_1000",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": null,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/bucketMs_null",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": "x",
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "((number & Minimum<1000>) | null | undefined)",
+    "method": "typia.assert",
+    "path": "$input[0].bucketMs",
+    "value": "x"
+   },
+   "name": "series/bucketMs_str",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": -5,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": {
+    "expected": "number & Minimum<1000>",
+    "method": "typia.assert",
+    "path": "$input[0].bucketMs",
+    "value": -5
+   },
+   "name": "series/bucketMs_neg",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": 1500.5,
+     "limit": 10,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "t"
+      }
+     ],
+     "timeRange": [
+      1,
+      null
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/bucketMs_frac",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "groupBy": [
+      "device_key"
+     ],
+     "limit": 100,
+     "method": "AVG",
+     "metrics": [
+      "temperature"
+     ],
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      "2026-02-01T00:00:00Z"
+     ]
+    }
+   ],
+   "error": {
+    "expected": "SeriesMetric",
+    "method": "typia.assert",
+    "path": "$input[0].metrics[0]",
+    "value": "temperature"
+   },
+   "name": "series/old_payload",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "bucketMs": 60000,
+     "groupBy": [
+      "device_key"
+     ],
+     "limit": 100,
+     "metrics": [
+      {
+       "method": "AVG",
+       "ref": "temperature"
+      }
+     ],
+     "timeRange": [
+      "2026-01-01T00:00:00Z",
+      "2026-02-01T00:00:00Z"
+     ]
+    }
+   ],
+   "error": null,
+   "name": "series/new_payload",
+   "type": "series"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": "",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string & MinLength<1>",
+    "method": "typia.assert",
+    "path": "$input[0].column",
+    "value": ""
+   },
+   "name": "verify/column_empty",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": 1,
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string & MinLength<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].column",
+    "value": 1
+   },
+   "name": "verify/column_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "column": null,
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "(string & MinLength<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].column",
+    "value": null
+   },
+   "name": "verify/column_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "x",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `(string & MinLength<1>)` typed value next time.",
+    "expected": "(string & MinLength<1>)",
+    "method": "typia.assert",
+    "path": "$input[0].column"
+   },
+   "name": "verify/column_missing",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": 1,
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].candidate",
+    "value": 1
+   },
+   "name": "verify/candidate_num",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": null,
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].candidate",
+    "value": null
+   },
+   "name": "verify/candidate_null",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].candidate"
+   },
+   "name": "verify/candidate_missing",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "candidate": "",
+     "column": "api_key",
+     "limit": 1
+    }
+   ],
+   "error": null,
+   "name": "verify/candidate_empty",
+   "type": "verify"
+  },
+  {
+   "args": [
+    {
+     "app": "weather"
+    }
+   ],
+   "error": null,
+   "name": "resolve/ok",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    {
+     "app": 1
+    }
+   ],
+   "error": {
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].app",
+    "value": 1
+   },
+   "name": "resolve/num",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    {}
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].app"
+   },
+   "name": "resolve/missing",
+   "type": "resolve"
+  },
+  {
+   "args": [],
+   "error": {
+    "expected": "[__type]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": []
+   },
+   "name": "resolve/empty",
+   "type": "resolve"
+  },
+  {
+   "args": {},
+   "error": {
+    "expected": "AppAccessResolveArgs",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": {}
+   },
+   "name": "resolve/obj",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    {
+     "app": "x"
+    },
+    1
+   ],
+   "error": {
+    "expected": "[__type]",
+    "method": "typia.assert",
+    "path": "$input",
+    "value": [
+     {
+      "app": "x"
+     },
+     1
+    ]
+   },
+   "name": "resolve/two",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    null
+   ],
+   "error": {
+    "expected": "__type",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": null
+   },
+   "name": "resolve/null",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    "x"
+   ],
+   "error": {
+    "expected": "__type",
+    "method": "typia.assert",
+    "path": "$input[0]",
+    "value": "x"
+   },
+   "name": "resolve/str",
+   "type": "resolve"
+  },
+  {
+   "args": [
+    [
+     1
+    ]
+   ],
+   "error": {
+    "description": "The value at this path is `undefined`.\n\nPlease fill the `string` typed value next time.",
+    "expected": "string",
+    "method": "typia.assert",
+    "path": "$input[0].app"
+   },
+   "name": "resolve/list",
+   "type": "resolve"
+  }
+ ],
+ "source": "fleetdb-service databackend-service-v1.4.0 types/rpc.ts, the typia validators compiled from it (typia.assert<TableQueryArgs | SeriesQueryArgs | SecretRevealArgs | SecretVerifyArgs | AppAccessResolveArgs>); error is JSON.stringify of the TypeGuardError"
+}
