@@ -591,9 +591,10 @@ type pjHiddenZero2 struct{ N int }
 
 func (pjHiddenZero2) IsZero() bool { return false }
 
-// normalize does not panic where encoding/json does, and returns nil for a
-// nil pointer inside a json.Marshaler interface, where encoding/json calls
-// the method on the nil pointer.
+// normalize does not panic where encoding/json does: it reports a method it
+// cannot call, and returns nil for a nil pointer inside a json.Marshaler
+// interface whose method has a value receiver, which encoding/json calls on
+// the nil pointer (see also TestNormalizeNilReceiversWhereEncodingJSONPanics).
 func TestNormalizeWhereEncodingJSONPanics(t *testing.T) {
 	type marshalerField struct {
 		M json.Marshaler `json:"m"`
@@ -618,6 +619,347 @@ func TestNormalizeWhereEncodingJSONPanics(t *testing.T) {
 	}
 	if got, err := normalize(nilInside); err != nil || !reflect.DeepEqual(got, map[string]any{"m": nil}) {
 		t.Errorf("nil pointer in a json.Marshaler: %#v, %v", got, err)
+	}
+}
+
+// normalizeNoPanic is normalize, reporting a panic as an error.
+func normalizeNoPanic(v any) (out any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return normalize(v)
+}
+
+// Where encoding/json calls a MarshalJSON or MarshalText method on a nil
+// pointer — held in an interface of that method's type, or embedded and
+// promoting the method — and the method fails with a run-time error on it (a
+// value receiver, or a pointer receiver that dereferences it), encoding/json
+// panics; normalize sends nil, or "" for a map key, as for a nil pointer
+// elsewhere.
+func TestNormalizeNilReceiversWhereEncodingJSONPanics(t *testing.T) {
+	type marshalerField struct {
+		M json.Marshaler `json:"m"`
+	}
+	type textField struct {
+		T encoding.TextMarshaler `json:"t"`
+	}
+	panics := func(v any) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		_, _ = json.Marshal(v)
+		return false
+	}
+	cases := []struct {
+		name string
+		in   any
+		want any
+	}{
+		{"value receiver in a json.Marshaler", marshalerField{M: (*pjJSONVal)(nil)}, map[string]any{"m": nil}},
+		{"*time.Time in a json.Marshaler", marshalerField{M: (*time.Time)(nil)}, map[string]any{"m": nil}},
+		{"dereferencing pointer receiver in a TextMarshaler", textField{T: (*pjTextPtr)(nil)}, map[string]any{"t": nil}},
+		{"value receiver in a TextMarshaler element", []encoding.TextMarshaler{(*pjTextVal)(nil)}, []any{nil}},
+		{"nil embedded *time.Time", pjEmbedsTimePtr{N: 7}, nil},
+		{"nil embedded *time.Time, in a Row", Row{"tsp": pjEmbedsTimePtr{N: 7}}, map[string]any{"tsp": nil}},
+		{"value receiver through a nil embedded pointer", struct {
+			*pjJSONVal
+			N int
+		}{nil, 1}, nil},
+		{"dereferencing pointer receiver through a nil embedded pointer", []struct{ *pjJSONPtr }{{}}, []any{nil}},
+		{"nil embedded pointer two levels down", struct{ PjStamped2 }{}, nil},
+		{"nil embedded interface", struct{ json.Marshaler }{}, nil},
+		{"embedded interface holding a dereferencing nil pointer", struct {
+			encoding.TextMarshaler
+		}{(*pjTextPtr)(nil)}, nil},
+		{"*time.Time in an interface key", map[encoding.TextMarshaler]int{(*time.Time)(nil): 1}, map[string]any{"": int64(1)}},
+		{"dereferencing pointer receiver in an interface key", map[encoding.TextMarshaler]int{(*pjPtrKey)(nil): 1}, map[string]any{"": int64(1)}},
+		{"key promoting through a nil embedded *time.Time", map[pjEmbedsTimePtr]int{{N: 1}: 1}, map[string]any{"": int64(1)}},
+	}
+	for _, c := range cases {
+		if !panics(c.in) {
+			t.Errorf("%s: encoding/json no longer panics; add it to the differential corpus", c.name)
+		}
+		if got, err := normalizeNoPanic(c.in); err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %#v, %v; want %#v", c.name, got, err, c.want)
+		}
+	}
+	// A panic that is not a run-time error — the method's own — propagates,
+	// as with encoding/json.
+	for _, in := range []any{marshalerField{M: (*pjPanicky)(nil)}, marshalerField{M: &pjPanicky{}}} {
+		func() {
+			defer func() {
+				if r := recover(); r != "pjPanicky: refused" {
+					t.Errorf("%#v: recovered %v, want the method's panic", in, r)
+				}
+			}()
+			_, _ = normalize(in)
+		}()
+	}
+}
+
+// PjStamped2 embeds a pointer to a struct that embeds time.Time: a nil
+// pointer there makes time.Time's promoted methods panic.
+type PjStamped2 struct{ *PjStamp }
+
+// Round-3 finding 47: a nil pointer held in an interface whose type is a
+// json.Marshaler or encoding.TextMarshaler (a field of type json.Marshaler,
+// say) is encoded as encoding/json encodes it: through the method, called on
+// the nil pointer. What a method that handles a nil receiver returns is
+// sent; it is not replaced by nil.
+func TestNormalizeCallsMethodsOnNilPointersAsEncodingJSON(t *testing.T) {
+	type fields struct {
+		M json.Marshaler         `json:"m"`
+		T encoding.TextMarshaler `json:"t"`
+	}
+	cases := []struct {
+		in, want any
+	}{
+		{fields{M: (*pjOptional)(nil), T: (*big.Float)(nil)}, map[string]any{"m": "unset", "t": "<nil>"}},
+		{fields{M: (*big.Int)(nil), T: (*big.Int)(nil)}, map[string]any{"m": nil, "t": "<nil>"}},
+		{fields{M: (*pjMixed)(nil)}, map[string]any{"m": "mixed-json", "t": nil}},
+		{[]json.Marshaler{(*pjOptional)(nil), &pjOptional{V: 3}}, []any{"unset", int64(3)}},
+		{map[string]encoding.TextMarshaler{"x": (*big.Float)(nil)}, map[string]any{"x": "<nil>"}},
+		{Row{"x": []json.Marshaler{(*pjOptional)(nil)}}, map[string]any{"x": []any{"unset"}}},
+		{map[encoding.TextMarshaler]int{(*big.Float)(nil): 1}, map[string]any{"<nil>": int64(1)}},
+		// Not held in such an interface, a nil pointer is nil, as for encoding/json.
+		{Row{"x": (*pjOptional)(nil)}, map[string]any{"x": nil}},
+		{struct{ X *pjOptional }{}, map[string]any{"X": nil}},
+	}
+	for _, c := range cases {
+		got, err := normalizeNoPanic(c.in)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%#v: %#v, %v; want %#v", c.in, got, err, c.want)
+		}
+		checkLikeJSON(t, fmt.Sprintf("%#v", c.in), c.in, false)
+	}
+}
+
+// Round-3 finding 46: a time.Time map key is sent in UTC, as a time.Time
+// value is — also behind a pointer, in an interface or embedded in the key
+// type — instead of keeping its zone offset.
+func TestNormalizeTimeKeysAreUTC(t *testing.T) {
+	at := time.Date(2026, 10, 8, 14, 0, 0, 123e6, time.FixedZone("CEST", 2*3600))
+	const want = "2026-10-08T12:00:00.123Z"
+	cases := map[string]any{
+		"map[time.Time]":                        map[time.Time]float64{at: 21.5},
+		"map[*time.Time]":                       map[*time.Time]float64{&at: 21.5},
+		"time.Time in map[TextMarshaler]":       map[encoding.TextMarshaler]float64{at: 21.5},
+		"*time.Time in map[TextMarshaler]":      map[encoding.TextMarshaler]float64{&at: 21.5},
+		"key type embedding time.Time":          map[pjEmbedsTime]float64{{at, "note"}: 21.5},
+		"key type embedding *time.Time":         map[pjEmbedsTimePtr]float64{{&at, 1}: 21.5},
+		"key type embedding it two levels down": map[pjStamped]float64{{PjStamp{at}, 1}: 21.5},
+		"key type with its own MarshalJSON":     map[pjEpoch]float64{{at}: 21.5}, // keys use MarshalText
+	}
+	for name, in := range cases {
+		got, err := normalizeNoPanic(in)
+		if err != nil || !reflect.DeepEqual(got, map[string]any{want: 21.5}) {
+			t.Errorf("%s: %#v, %v", name, got, err)
+		}
+	}
+	// A key and a value holding the same instant are the same string.
+	nested := Row{"readings": map[time.Time]float64{at: 21.5}, "tsp": at}
+	wantNested := map[string]any{"readings": map[string]any{want: 21.5}, "tsp": want}
+	if got, err := normalize(nested); err != nil || !reflect.DeepEqual(got, wantNested) {
+		t.Errorf("Row: %#v, %v", got, err)
+	}
+	pos, kw, _, err := splitArgs([]any{map[time.Time]float64{at: 21.5}, Kwargs{"r": nested}})
+	if err != nil || !reflect.DeepEqual(pos, []any{map[string]any{want: 21.5}}) || !reflect.DeepEqual(kw, map[string]any{"r": wantNested}) {
+		t.Errorf("splitArgs: %#v %#v, %v", pos, kw, err)
+	}
+	if rows, err := normalizeRows([]Row{nested}); err != nil || !reflect.DeepEqual(rows, []any{wantNested}) {
+		t.Errorf("normalizeRows: %#v, %v", rows, err)
+	}
+	// Outside the years 0000-9999 a key is formatted as a value is
+	// (encoding/json fails on such a key).
+	far := time.Date(10000, 1, 1, 0, 30, 0, 0, time.FixedZone("x", 2*3600))
+	if got, err := normalize(far); err != nil || got != "9999-12-31T22:30:00Z" {
+		t.Errorf("far value: %#v, %v", got, err)
+	}
+	if got, err := normalize(map[time.Time]int{far: 1}); err != nil || !reflect.DeepEqual(got, map[string]any{"9999-12-31T22:30:00Z": int64(1)}) {
+		t.Errorf("far key: %#v, %v", got, err)
+	}
+	// Keys naming the same instant in different zones become one entry:
+	// that of the key encoding/json would have written last (the greatest
+	// with its zone offset), whatever the order of map iteration.
+	same := map[time.Time]string{at: "cest", at.UTC(): "utc", at.In(time.FixedZone("x", -5*3600)): "x"}
+	for range 200 {
+		if got, err := normalize(same); err != nil || !reflect.DeepEqual(got, map[string]any{want: "cest"}) {
+			t.Fatalf("same instant: %#v, %v", got, err)
+		}
+	}
+	// A nil pointer key is "", as for encoding/json.
+	if got, err := normalize(map[*time.Time]int{nil: 1, &at: 2}); err != nil || !reflect.DeepEqual(got, map[string]any{"": int64(1), want: int64(2)}) {
+		t.Errorf("nil key: %#v, %v", got, err)
+	}
+	// Strings are sent as they are, however much they look like times.
+	const s = "2026-10-08T14:00:00.123+02:00"
+	got, err := normalize(Row{s: s, "m": map[string]string{s: s}, "k": map[pjString]int{s: 1}})
+	if want := map[string]any{s: s, "m": map[string]any{s: s}, "k": map[string]any{s: int64(1)}}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("strings: %#v, %v", got, err)
+	}
+}
+
+// Round-3 finding 46: a struct that embeds a time.Time is encoded through
+// time.Time's promoted MarshalJSON, as encoding/json does — as that time, its
+// other fields dropped — and so in UTC like any time.Time. A MarshalJSON of
+// its own wins, as for encoding/json.
+func TestNormalizeEmbeddedTimeIsUTC(t *testing.T) {
+	at := time.Date(2026, 10, 8, 14, 0, 0, 123e6, time.FixedZone("CEST", 2*3600))
+	const want = "2026-10-08T12:00:00.123Z"
+	type withMarshaler struct {
+		Tsp json.Marshaler `json:"tsp"`
+	}
+	type withText struct {
+		Tsp encoding.TextMarshaler `json:"tsp"`
+	}
+	cases := map[string]any{
+		"embedded time.Time":                    pjEmbedsTime{at, "note"},
+		"pointer to it":                         &pjEmbedsTime{at, "note"},
+		"embedded *time.Time":                   pjEmbedsTimePtr{&at, 1},
+		"two levels down":                       pjStamped{PjStamp{at}, 2},
+		"two levels down, through a pointer":    PjStamped2{&PjStamp{at}},
+		"through an unexported embedded struct": pjHiddenStamped{pjhiddenStamp{at}, 3},
+		"in a json.Marshaler field":             withMarshaler{Tsp: pjEmbedsTime{at, ""}},
+		"in a TextMarshaler field":              withText{Tsp: &pjEmbedsTime{at, ""}},
+		"in a Row":                              Row{"tsp": pjEmbedsTime{at, ""}},
+		"in a typed slice":                      []pjEmbedsTime{{at, ""}},
+		"in a typed map":                        map[string]PjStamp{"tsp": {at}},
+		"its own MarshalJSON sends the time":    pjNullTime{at},
+	}
+	for name, in := range cases {
+		got, err := normalizeNoPanic(in)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if s := stringsIn(got); len(s) != 1 || s[0] != want {
+			t.Errorf("%s: %#v, want %q", name, got, want)
+		}
+	}
+	if rows, err := normalizeRows([]Row{{"tsp": pjStamped{PjStamp{at}, 2}}}); err != nil || !reflect.DeepEqual(rows, []any{map[string]any{"tsp": want}}) {
+		t.Errorf("normalizeRows: %#v, %v", rows, err)
+	}
+	// A MarshalJSON of the type's own that does not send the time is used
+	// as it is.
+	if got, err := normalize(pjEpoch{at}); err != nil || got != at.UnixMilli() {
+		t.Errorf("own MarshalJSON: %#v, %v", got, err)
+	}
+	if got, err := normalize(pjNullTime{}); err != nil || got != nil {
+		t.Errorf("own MarshalJSON, zero: %#v, %v", got, err)
+	}
+	shallower, err := normalize(pjJSONVal{1})
+	if got, err2 := normalize(pjShallowerJSON{pjJSONVal{1}, PjStamp{at}}); err != nil || err2 != nil || !reflect.DeepEqual(got, shallower) {
+		t.Errorf("shallower MarshalJSON: %#v, %v; want %#v, %v", got, err2, shallower, err)
+	}
+	// Two time.Time at the same depth promote no method: a struct, or what a
+	// MarshalJSON of the type's own sends, as it is.
+	if got, err := normalize(pjTwoStamps{PjStamp{at}, pjhiddenStamp{at}}); err != nil || !reflect.DeepEqual(got, map[string]any{}) {
+		t.Errorf("two embedded: %#v, %v", got, err)
+	}
+	if got, err := normalize(pjTwoStampsJSON{PjStamp{at}, pjhiddenStamp{at}}); err != nil || got != "2026-10-08T14:00:00.123+02:00" {
+		t.Errorf("two embedded, own MarshalJSON: %#v, %v", got, err)
+	}
+	// Outside the years 0000-9999 it is formatted as the time.Time is
+	// (encoding/json fails on it).
+	far := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got, err := normalize(pjEmbedsTime{far, ""}); err != nil || got != "10000-01-01T00:00:00Z" {
+		t.Errorf("far: %#v, %v", got, err)
+	}
+}
+
+// Round-3 finding 45: a bulk row is encoded exactly as PublishToTable and
+// AppendToTable encode the same row: taken as a value, so a MarshalJSON or
+// MarshalText method with a pointer receiver applies to neither (a []*T
+// batch, or &row, uses it), not as json.Marshal([]T) would encode it.
+func TestBulkRowsEncodeLikeSingleRows(t *testing.T) {
+	var counter pjCounter
+	counter.Count.SetInt64(42)
+	addressable := pjAddressable{J: pjJSONPtr{1}, T: pjTextPtr{"t"}, M: pjMixed{2}, Z: pjZeroPtr{1}, BP: big.NewInt(-42)}
+	rows := []any{
+		pjRenamed{Temp: 21.5},
+		pjMachine{State: 1, Temp: 60},
+		counter,
+		pjTextRow{A: 7},
+		addressable,
+		pjJSONVal{3},
+		Row{"a": 1},
+		&pjRenamed{Temp: 1.5},
+	}
+	single := func(r any) any {
+		t.Helper()
+		pos, _, _, err := splitArgs([]any{r})
+		if err != nil {
+			t.Fatalf("%T: %v", r, err)
+		}
+		return pos[0]
+	}
+	// sliceOf returns a []T holding r, whose element is addressable as in
+	// any []T.
+	sliceOf := func(r any) any {
+		return reflect.Append(reflect.MakeSlice(reflect.SliceOf(reflect.TypeOf(r)), 0, 1), reflect.ValueOf(r)).Interface()
+	}
+	for _, r := range rows {
+		want := single(r)
+		array := reflect.New(reflect.ArrayOf(1, reflect.TypeOf(r))).Elem()
+		array.Index(0).Set(reflect.ValueOf(r))
+		for _, batch := range []any{sliceOf(r), array.Interface(), []any{r}} {
+			got, err := normalizeRows(batch)
+			if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+				t.Errorf("%T: %#v, %v\nPublishToTable sends %#v", batch, got, err, want)
+			}
+		}
+	}
+	if got := single(pjRenamed{Temp: 21.5}); !reflect.DeepEqual(got, map[string]any{"temperature": 21.5}) {
+		t.Errorf("value row: %#v", got)
+	}
+	// The way to use a pointer-receiver method: a []*T batch, or &row.
+	if got := single(&pjRenamed{Temp: 21.5}); !reflect.DeepEqual(got, map[string]any{"temp_c": 21.5}) {
+		t.Errorf("pointer row: %#v", got)
+	}
+	if got, err := normalizeRows([]*pjRenamed{{Temp: 21.5}}); err != nil || !reflect.DeepEqual(got, []any{map[string]any{"temp_c": 21.5}}) {
+		t.Errorf("[]*T: %#v, %v", got, err)
+	}
+
+	// Through the public API, published and appended.
+	f := flock(t)
+	for _, r := range rows {
+		if err := f.PublishToTable(bg, "sensordata", r); err != nil {
+			t.Fatal(err)
+		}
+		one := f.own.lastPublish(t).Args[0]
+		if err := f.PublishRowsToTable(bg, "sensordata", sliceOf(r)); err != nil {
+			t.Errorf("PublishRowsToTable([]%T): %v", r, err)
+		} else if bulk := f.own.lastPublish(t).Args[0].([]any)[0]; !reflect.DeepEqual(bulk, one) {
+			t.Errorf("PublishRowsToTable([]%T) sends %#v; PublishToTable %#v", r, bulk, one)
+		}
+		if _, err := f.AppendToTable(bg, "sensordata", r); err != nil {
+			t.Fatal(err)
+		}
+		one = f.own.lastCall(t).Args[0]
+		if _, err := f.AppendRowsToTable(bg, "sensordata", sliceOf(r)); err != nil {
+			t.Errorf("AppendRowsToTable([]%T): %v", r, err)
+		} else if bulk := f.own.lastCall(t).Args[0].([]any)[0]; !reflect.DeepEqual(bulk, one) {
+			t.Errorf("AppendRowsToTable([]%T) sends %#v; AppendToTable %#v", r, bulk, one)
+		}
+	}
+}
+
+// A bulk row that its own MarshalJSON or MarshalText method encodes as
+// something other than an object is refused with a message that says so.
+func TestBulkRowEncodedAsNoObject(t *testing.T) {
+	cases := []struct {
+		rows any
+		want string
+	}{
+		{[]pjTextVal{{"v"}}, "row at index 0 must be a map or struct, got ironflock.pjTextVal, which its MarshalText method encodes as a string"},
+		{[]any{Row{}, pjRawJSON("[1]")}, "row at index 1 must be a map or struct, got ironflock.pjRawJSON, which its MarshalJSON method encodes as a list"},
+		{[]pjNullTime{{}}, "row at index 0 must be a map or struct, got ironflock.pjNullTime, which its MarshalJSON method encodes as null"},
+		{[]*pjEpoch{{}}, "row at index 0 must be a map or struct, got *ironflock.pjEpoch, which its MarshalJSON method encodes as a number"},
+	}
+	for _, c := range cases {
+		if _, err := normalizeRows(c.rows); err == nil || err.Error() != c.want {
+			t.Errorf("%#v: %v\nwant %s", c.rows, err, c.want)
+		}
 	}
 }
 
@@ -677,9 +1019,11 @@ func refNumbers(v any) (any, error) {
 // diffJSON describes how got, normalize's result for a value, differs from
 // want, viaJSON's for the same value, allowing for normalize's documented
 // differences: []byte stays bytes instead of a base64 string; a time.Time
-// is sent in UTC; and a float stays a float — where encoding/json wrote an
-// integral float as an integer, lenient accepts the float, otherwise the
-// caller must use non-integral floats only. It returns "" when they agree.
+// is sent in UTC, as a value and as a map key, so keys naming the same
+// instant merge into one, holding the value of the greatest original key;
+// and a float stays a float — where encoding/json wrote an integral float as
+// an integer, lenient accepts the float, otherwise the caller must use
+// non-integral floats only. It returns "" when they agree.
 func diffJSON(got, want any, lenient bool) string {
 	return diffAt("", got, want, lenient)
 }
@@ -756,15 +1100,32 @@ func diffAt(path string, got, want any, lenient bool) string {
 		}
 	case map[string]any:
 		g, ok := got.(map[string]any)
-		if !ok || len(g) != len(w) {
+		if !ok {
 			return bad
 		}
-		for k, wv := range w {
-			gv, ok := g[k]
-			if !ok {
-				return fmt.Sprintf("at %q: key %q missing from %#v", path, k, got)
+		// The key of got each key of want is sent as: itself, or a time.Time
+		// key in UTC. Of keys of want sent as the same key, the greatest wins.
+		wins := make(map[string]string, len(w)) // got's key → want's key
+		for k := range w {
+			gk := k
+			if _, ok := g[k]; !ok {
+				if t, err := time.Parse(time.RFC3339Nano, k); err == nil {
+					gk = t.UTC().Format(time.RFC3339Nano)
+				}
 			}
-			if d := diffAt(path+"."+k, gv, wv, lenient); d != "" {
+			if prev, ok := wins[gk]; !ok || k > prev {
+				wins[gk] = k
+			}
+		}
+		if len(g) != len(wins) {
+			return bad
+		}
+		for gk, k := range wins {
+			gv, ok := g[gk]
+			if !ok {
+				return fmt.Sprintf("at %q: key %q missing from %#v", path, gk, got)
+			}
+			if d := diffAt(path+"."+k, gv, w[k], lenient); d != "" {
 				return d
 			}
 		}
@@ -1209,6 +1570,127 @@ type pjSpecial struct {
 	BigF   *big.Float
 }
 
+// pjEmbedsTimePtr gets time.Time's methods promoted through a pointer.
+type pjEmbedsTimePtr struct {
+	*time.Time
+	N int
+}
+
+// PjStamp embeds time.Time, and pjStamped a PjStamp: time.Time's methods
+// are promoted two levels up.
+type PjStamp struct{ time.Time }
+
+type pjStamped struct {
+	PjStamp
+	V int
+}
+
+// pjhiddenStamp is an unexported PjStamp: methods are promoted through it
+// all the same.
+type pjhiddenStamp struct{ time.Time }
+
+type pjHiddenStamped struct {
+	pjhiddenStamp
+	V int
+}
+
+// pjTwoStamps embeds two time.Time at the same depth: their methods
+// conflict, so neither is promoted and it is encoded as a struct.
+type pjTwoStamps struct {
+	PjStamp
+	pjhiddenStamp
+}
+
+// pjTwoStampsJSON is pjTwoStamps with a MarshalJSON of its own that sends
+// one of the two times as it encodes itself.
+type pjTwoStampsJSON struct {
+	PjStamp
+	pjhiddenStamp
+}
+
+func (s pjTwoStampsJSON) MarshalJSON() ([]byte, error) { return s.pjhiddenStamp.MarshalJSON() }
+
+// pjShallowerJSON has a MarshalJSON one level up from a time.Time's, which
+// wins.
+type pjShallowerJSON struct {
+	pjJSONVal
+	PjStamp
+}
+
+// pjEpoch embeds time.Time but declares its own MarshalJSON, which wins: it
+// is sent as epoch milliseconds, not as the time.Time it embeds.
+type pjEpoch struct{ time.Time }
+
+func (e pjEpoch) MarshalJSON() ([]byte, error) { return strconv.AppendInt(nil, e.UnixMilli(), 10), nil }
+
+// pjNullTime embeds time.Time and declares a MarshalJSON that sends the
+// zero time as null and any other as the time.Time encodes itself.
+type pjNullTime struct{ time.Time }
+
+func (n pjNullTime) MarshalJSON() ([]byte, error) {
+	if n.IsZero() {
+		return []byte("null"), nil
+	}
+	return n.Time.MarshalJSON()
+}
+
+// pjRecursive embeds a pointer to itself, through which its own MarshalText
+// would be promoted were it not declared on it.
+type pjRecursive struct {
+	*pjRecursive
+	N int
+}
+
+func (r pjRecursive) MarshalText() ([]byte, error) { return fmt.Appendf(nil, "rec-%d", r.N), nil }
+
+// pjOptional has a MarshalJSON for a nil receiver too.
+type pjOptional struct{ V int }
+
+func (o *pjOptional) MarshalJSON() ([]byte, error) {
+	if o == nil {
+		return []byte(`"unset"`), nil
+	}
+	return strconv.AppendInt(nil, int64(o.V), 10), nil
+}
+
+// pjPanicky's MarshalJSON panics with a value of its own, not a run-time
+// error.
+type pjPanicky struct{}
+
+func (*pjPanicky) MarshalJSON() ([]byte, error) { panic("pjPanicky: refused") }
+
+// pjRenamed maps its field onto another column with a MarshalJSON method
+// that has a pointer receiver.
+type pjRenamed struct {
+	Temp float64 `json:"temperature"`
+}
+
+func (r *pjRenamed) MarshalJSON() ([]byte, error) {
+	return fmt.Appendf(nil, `{"temp_c": %g}`, r.Temp), nil
+}
+
+// pjState is an enum whose MarshalText has a pointer receiver.
+type pjState int
+
+func (s *pjState) MarshalText() ([]byte, error) { return []byte([]string{"idle", "running"}[*s]), nil }
+
+type pjMachine struct {
+	State pjState `json:"state"`
+	Temp  float64 `json:"temperature"`
+}
+
+// pjCounter holds a big.Int, whose methods have pointer receivers, by value.
+type pjCounter struct {
+	Count big.Int `json:"count"`
+}
+
+// pjTextRow is a row type whose MarshalText has a pointer receiver.
+type pjTextRow struct {
+	A int `json:"a"`
+}
+
+func (r *pjTextRow) MarshalText() ([]byte, error) { return fmt.Appendf(nil, "text-%d", r.A), nil }
+
 // pjCorpus returns the values normalize must encode as encoding/json does
 // (up to the documented differences): every struct-tag rule, embedding,
 // map keys, nil values, marshalers, special types, and values both refuse.
@@ -1338,10 +1820,39 @@ func pjCorpus() []struct {
 		{"pointer receivers in an addressable array", &[1]pjAddressable{addressable}},
 		{"embedded MarshalJSON", pjEmbedsJSON{pjJSONVal{1}, 2}},
 		{"embedded time.Time", pjEmbedsTime{at, "note"}},
+		{"embedded time.Time, other ways", []any{pjEmbedsTimePtr{&at, 1}, &pjEmbedsTimePtr{&at, 2}, pjStamped{PjStamp{at}, 3},
+			PjStamped2{&PjStamp{at}}, pjHiddenStamped{pjhiddenStamp{at}, 4}, pjTwoStamps{PjStamp{at}, pjhiddenStamp{atUTC}},
+			pjShallowerJSON{pjJSONVal{1}, PjStamp{at}}, pjEpoch{at}, pjNullTime{at}, pjNullTime{}}},
+		{"time map keys", []any{
+			map[time.Time]int{at: 1, atUTC: 2, {}: 3},
+			map[*time.Time]string{&at: "a", nil: "nil"},
+			map[encoding.TextMarshaler]int{at: 1, &atUTC: 2, pjTextVal{"v"}: 3, (*big.Int)(nil): 4},
+			map[pjEmbedsTime]int{{at, "note"}: 1},
+			map[pjEpoch]int{{at}: 1},
+			map[PjStamp]int{{atUTC}: 1},
+			map[string]map[time.Time]float64{"r": {at: 21.5}},
+		}},
+		{"time map keys naming the same instant", map[time.Time]string{at: "cest", at.UTC(): "utc", at.In(time.FixedZone("x", -5*3600)): "x"}},
 		{"embedded pointer MarshalJSON", []any{pjEmbedsPtrJSON{pjJSONPtr{1}, 2}, &pjEmbedsPtrJSON{pjJSONPtr{3}, 4}}},
 		{"interfaces", pjInterfaces{M: pjJSONVal{1}, T: pjBoth{}, S: time.Duration(1500), E: errors.New("x"), A: &pjJSONPtr{2}}},
 		{"interfaces holding pointers", pjInterfaces{M: &pjMixed{}, T: &pjTextPtr{"p"}, S: tree.Children[1].Name2(), A: pjMixed{}}},
 		{"nil interfaces", pjInterfaces{}},
+		{"interfaces holding nil pointers with nil-safe methods", []any{
+			pjInterfaces{M: (*pjMixed)(nil), T: (*big.Float)(nil)},
+			pjInterfaces{M: (*big.Int)(nil), T: (*big.Int)(nil)},
+			pjInterfaces{M: (*pjOptional)(nil)},
+		}},
+		{"marshaler elements and map values holding nil pointers", []any{
+			[]encoding.TextMarshaler{(*big.Float)(nil), (*big.Int)(nil), nil},
+			[]json.Marshaler{(*pjOptional)(nil), (*pjMixed)(nil), nil, &pjOptional{V: 1}},
+			map[string]json.Marshaler{"m": (*pjMixed)(nil), "o": (*pjOptional)(nil), "n": nil},
+			map[encoding.TextMarshaler]int{(*big.Int)(nil): 1},
+		}},
+		{"methods promoted through embedded pointers and interfaces", []any{
+			struct{ *pjOptional }{}, struct{ *pjOptional }{&pjOptional{V: 2}}, struct{ *big.Int }{},
+			struct{ json.Marshaler }{pjJSONVal{1}}, struct{ json.Marshaler }{(*pjOptional)(nil)},
+			struct{ encoding.TextMarshaler }{(*big.Float)(nil)}, pjRecursive{nil, 1}, pjRecursive{&pjRecursive{N: 2}, 3},
+		}},
 		{"special types", pjSpecial{Raw: raw, RawPtr: &raw, Num: "-1.5e3", Nums: []json.Number{"1", "2.5"}, Time: at,
 			TimeP: &at, Times: map[string]time.Time{"t": at}, Dur: time.Second, Month: time.March, Big: big.NewInt(7), BigF: bigF}},
 		{"special types, zero", pjSpecial{}},
@@ -1436,10 +1947,11 @@ var (
 		reflect.TypeFor[any](), reflect.TypeFor[json.RawMessage](), reflect.TypeFor[pjJSONVal](), reflect.TypeFor[pjJSONPtr](),
 		reflect.TypeFor[pjTextVal](), reflect.TypeFor[pjTextPtr](), reflect.TypeFor[pjMixed](), reflect.TypeFor[pjBoth](),
 		reflect.TypeFor[pjZeroVal](), reflect.TypeFor[pjZeroPtr](), reflect.TypeFor[pjList](), reflect.TypeFor[pjByteText](),
+		reflect.TypeFor[pjEmbedsTime](), reflect.TypeFor[json.Marshaler](), reflect.TypeFor[encoding.TextMarshaler](),
 	}
 	pjKeyTypes = []reflect.Type{
 		reflect.TypeFor[string](), reflect.TypeFor[pjString](), reflect.TypeFor[int](), reflect.TypeFor[uint8](),
-		reflect.TypeFor[pjKey](), reflect.TypeFor[pjIntKey](),
+		reflect.TypeFor[pjKey](), reflect.TypeFor[pjIntKey](), reflect.TypeFor[time.Time](),
 	}
 	// pjAnyTypes are the types of the values put in an interface.
 	pjAnyTypes = []reflect.Type{
@@ -1448,6 +1960,28 @@ var (
 		reflect.TypeFor[time.Time](), reflect.TypeFor[*time.Time](), reflect.TypeFor[pjJSONVal](), reflect.TypeFor[*pjJSONPtr](),
 		reflect.TypeFor[pjJSONPtr](), reflect.TypeFor[pjTextVal](), reflect.TypeFor[pjMixed](), reflect.TypeFor[*pjMixed](),
 		reflect.TypeFor[pjTags](), reflect.TypeFor[pjOmitEmpty](), reflect.TypeFor[json.Number](), reflect.TypeFor[pjByteText](),
+		reflect.TypeFor[pjEmbedsTime](),
+	}
+	// pjMarshalerTypes and pjTextMarshalerTypes are the types of the values
+	// put in a json.Marshaler and in an encoding.TextMarshaler. encoding/json
+	// calls the interface's method on a nil pointer in it too, so such a
+	// pointer is nil only where pjNilSafe says the method handles that.
+	pjMarshalerTypes = []reflect.Type{
+		reflect.TypeFor[pjJSONVal](), reflect.TypeFor[*pjJSONPtr](), reflect.TypeFor[*pjMixed](), reflect.TypeFor[pjBoth](),
+		reflect.TypeFor[pjList](), reflect.TypeFor[time.Time](), reflect.TypeFor[*time.Time](), reflect.TypeFor[*big.Int](),
+		reflect.TypeFor[pjEmbedsTime](), reflect.TypeFor[*pjOptional](), reflect.TypeFor[json.RawMessage](),
+	}
+	pjTextMarshalerTypes = []reflect.Type{
+		reflect.TypeFor[pjTextVal](), reflect.TypeFor[*pjTextPtr](), reflect.TypeFor[pjMixed](), reflect.TypeFor[*pjMixed](),
+		reflect.TypeFor[pjBoth](), reflect.TypeFor[time.Time](), reflect.TypeFor[*time.Time](), reflect.TypeFor[*big.Int](),
+		reflect.TypeFor[*big.Float](), reflect.TypeFor[pjEmbedsTime](), reflect.TypeFor[pjKey](),
+	}
+	pjNilSafe = map[[2]reflect.Type]bool{ // {interface, pointer type}
+		{marshalerType, reflect.TypeFor[*pjMixed]()}:       true,
+		{marshalerType, reflect.TypeFor[*big.Int]()}:       true,
+		{marshalerType, reflect.TypeFor[*pjOptional]()}:    true,
+		{textMarshalerType, reflect.TypeFor[*big.Int]()}:   true,
+		{textMarshalerType, reflect.TypeFor[*big.Float]()}: true,
 	}
 	pjFieldNames = []string{"A", "B", "Shared", "X", "Y"}
 	pjTagNames   = []string{"a", "b", "B", "Shared", "shared", "x", "A", "-", "a-b", "ü", `in\"valid`}
@@ -1643,8 +2177,19 @@ func (g *pjRandom) fill(v reflect.Value, depth int) {
 		}
 	case reflect.Interface:
 		if r.IntN(3) > 0 && depth < 6 {
-			e := reflect.New(pjAnyTypes[r.IntN(len(pjAnyTypes))]).Elem()
+			types := pjAnyTypes
+			switch t {
+			case marshalerType:
+				types = pjMarshalerTypes
+			case textMarshalerType:
+				types = pjTextMarshalerTypes
+			}
+			e := reflect.New(types[r.IntN(len(types))]).Elem()
 			g.fill(e, depth+1)
+			if t != reflect.TypeFor[any]() && e.Kind() == reflect.Pointer && e.IsNil() && !pjNilSafe[[2]reflect.Type{t, e.Type()}] {
+				e.Set(reflect.New(e.Type().Elem())) // encoding/json would panic on the nil pointer
+				g.fill(e.Elem(), depth+1)
+			}
 			v.Set(e)
 		}
 	case reflect.Struct:
