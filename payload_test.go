@@ -20,7 +20,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/gammazero/nexus/v3/transport/serialize"
+	"github.com/ironflock/nexus/v3/transport/serialize"
 )
 
 func TestNormalizeIntegers(t *testing.T) {

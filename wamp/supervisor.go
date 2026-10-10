@@ -9,11 +9,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/transport"
-	"github.com/gammazero/nexus/v3/transport/serialize"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
-	"github.com/gammazero/nexus/v3/wamp/crsign"
+	"github.com/ironflock/nexus/v3/client"
+	"github.com/ironflock/nexus/v3/transport"
+	"github.com/ironflock/nexus/v3/transport/serialize"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/wamp/crsign"
 )
 
 // tunables are the timing knobs of a Connection. They default to the

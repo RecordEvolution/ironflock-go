@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // Reconnect and wait tunables. They mirror the Python and JavaScript SDKs.

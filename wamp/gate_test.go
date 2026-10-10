@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/transport"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	"github.com/ironflock/nexus/v3/transport"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // newReadAheadPeer returns a fake inner peer whose connection has received

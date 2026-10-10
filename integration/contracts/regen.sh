@@ -95,9 +95,9 @@ authz() {
   local w="$TMP/authz" nexus
   mkdir -p "$w"
   git -C "$IRONFLOCK_AUTH_SRC" archive HEAD | tar -x -C "$w"
-  # The fork commit this SDK pins (its go.mod replace line), not a local checkout.
-  nexus="$(cd "$ROOT" && go list -m -f '{{with .Replace}}{{.Path}}@{{.Version}}{{end}}' github.com/gammazero/nexus/v3)"
-  (cd "$w" && go mod edit -replace="github.com/gammazero/nexus/v3=$nexus")
+  # The fork commit this SDK pins, not a local checkout.
+  nexus="$(cd "$ROOT" && go list -m -f '{{.Path}}@{{.Version}}' github.com/ironflock/nexus/v3)"
+  (cd "$w" && go get "$nexus")
   cp "$HERE/gen/authz_contract_test.go.tmpl" "$w/internal/authz/zz_contract_test.go"
   python3 -I "$HERE/gen/authz_requests.py" "$w/requests.json"
   (cd "$w" && AUTHZ_IN="$w/requests.json" AUTHZ_OUT="$w/real.json" GOFLAGS=-mod=mod \

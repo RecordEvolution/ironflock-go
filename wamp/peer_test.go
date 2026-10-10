@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // fakePeer is a controllable inner peer.

@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/router"
-	"github.com/gammazero/nexus/v3/router/auth"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	"github.com/ironflock/nexus/v3/router"
+	"github.com/ironflock/nexus/v3/router/auth"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 const (
@@ -552,7 +552,7 @@ func interestingGoroutines() map[string]string {
 		relevant := false
 		for _, line := range strings.Split(g, "\n") {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "github.com/gammazero/nexus/") ||
+			if strings.HasPrefix(line, "github.com/ironflock/nexus/") ||
 				(strings.HasPrefix(line, "github.com/RecordEvolution/ironflock-go/wamp.") &&
 					!strings.Contains(line, "wamp.Test") && !strings.Contains(line, "_test.go")) {
 				relevant = true

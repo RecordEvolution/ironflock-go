@@ -20,38 +20,15 @@ app user's fleet.
 
 ```shell
 go get github.com/RecordEvolution/ironflock-go
-go mod edit -replace=github.com/gammazero/nexus/v3=github.com/RecordEvolution/nexus/v3@v3.0.0-20261001140357-5a989b085bbb
-go mod tidy
 ```
 
 ### WAMP library
 
-The SDK speaks WAMP through RecordEvolution's fork of [nexus](https://github.com/RecordEvolution/nexus)
-(branch `v4-contrib`) — the code [ironflock-router](https://github.com/RecordEvolution/ironflock-router) is
-built on. The fork keeps the upstream module path `github.com/gammazero/nexus/v3`, so this module's `go.mod`
-wires it in with a `replace` pinned to a fork commit.
-
-The `replace` line is **required** in your app's `go.mod` too. Go applies `replace` directives only in the main
-module, and the SDK does not build against upstream nexus: it uses API that only the fork has. Without the line
-Go picks upstream nexus v3.3.0, and the build fails inside the SDK:
-
-```text
-# github.com/RecordEvolution/ironflock-go/wamp
-.../wamp/peer.go:...: m.Details undefined (type *"github.com/gammazero/nexus/v3/wamp".Unregistered has no field or method Details)
-```
-
-The second command above adds the line:
-
-```text
-replace github.com/gammazero/nexus/v3 => github.com/RecordEvolution/nexus/v3 v3.0.0-20261001140357-5a989b085bbb
-```
-
-When you upgrade the SDK, keep the pinned commit in step with the one in this module's `go.mod`.
-
-Because of the `replace`, `go install` and `go run` with a version (`pkg@v1.9.0`, `pkg@latest`) work neither for
-the examples nor for a program built on the SDK: Go refuses them for a module whose `go.mod` has `replace`
-directives. Build from source instead: clone this repository and `go run ./examples/simple_publish`, or
-`go build` / `go install .` inside your own module (in a Dockerfile, copy the module and `go build` it).
+The SDK speaks WAMP through IronFlock's fork of [nexus](https://github.com/IronFlock/nexus)
+(module `github.com/ironflock/nexus/v3`, branch `v4-contrib`) — the code
+[ironflock-router](https://github.com/IronFlock/ironflock-router) is built on. It is an ordinary
+dependency: `go get` pulls the pinned fork commit, and no `replace` is needed in your module.
+`go install` and `go run` with a version (`pkg@latest`) work too.
 
 ## Usage
 

@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	"github.com/gammazero/nexus/v3/router"
-	"github.com/gammazero/nexus/v3/router/auth"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	"github.com/ironflock/nexus/v3/router"
+	"github.com/ironflock/nexus/v3/router/auth"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 
 	"github.com/RecordEvolution/ironflock-go/wamp"
 )

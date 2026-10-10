@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 func eventCollector(buffer int) (EventHandler, chan *Event) {

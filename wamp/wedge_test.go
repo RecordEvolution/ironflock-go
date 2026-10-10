@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gammazero/nexus/v3/client"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // A nexus client's receive loop can wedge for good: a reply handed over just

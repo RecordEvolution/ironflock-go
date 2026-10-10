@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // Subscriptions that share a DeliveryGroup deliver their events one at a

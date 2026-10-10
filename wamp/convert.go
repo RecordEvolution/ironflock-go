@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // normalizeValue converts a decoded WAMP payload value into the JSON-like Go

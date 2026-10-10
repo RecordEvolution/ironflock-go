@@ -28,16 +28,23 @@ router-up:
 router-build src out="integration/ironflock-router/.bin/ironflock-router" ref="HEAD":
 	#!/usr/bin/env bash
 	set -euo pipefail
-	# The router's go.mod replaces nexus with a path on its maintainer's machine
-	# (and its `just build` wants a ../../nexus checkout): build a copy of the
-	# ref with the fork's module version instead, leaving the checkout untouched.
-	nexus="$(go list -m -f '{{{{with .Replace}}{{{{.Path}}@{{{{.Version}}{{{{end}}' github.com/gammazero/nexus/v3)"
+	# Build a copy of the ref against the nexus fork commit this SDK pins,
+	# leaving the checkout untouched.
+	nexus="$(go list -m -f '{{{{.Path}}@{{{{.Version}}' github.com/ironflock/nexus/v3)"
 	out="$(mkdir -p "$(dirname "{{out}}")" && cd "$(dirname "{{out}}")" && pwd -P)/$(basename "{{out}}")"
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/ironflock-router-build.XXXXXX")"
 	trap 'rm -rf -- "$tmp"' EXIT
 	git -C "{{src}}" archive "{{ref}}" | tar -x -C "$tmp"
 	cd "$tmp"
-	go mod edit -replace="github.com/gammazero/nexus/v3=$nexus"
+	if grep -q 'github.com/ironflock/nexus/v3' go.mod; then
+		go get "$nexus"
+	else
+		# Ref predates the fork's module rename: it imports the upstream path and
+		# replaces it with a local checkout. Point that replace at the last fork
+		# commit that still declares the upstream path.
+		nexus="github.com/ironflock/nexus/v3@v3.0.0-20261001140357-5a989b085bbb"
+		go mod edit -replace="github.com/gammazero/nexus/v3=$nexus"
+	fi
 	go mod tidy
 	go build -o "$out" ./cmd/ironflock-router
 	echo "built $out ($(git -C "{{src}}" describe --tags --always "{{ref}}"), nexus $nexus)"

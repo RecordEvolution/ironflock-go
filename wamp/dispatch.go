@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 
 	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
-	"github.com/gammazero/nexus/v3/client"
-	nxwamp "github.com/gammazero/nexus/v3/wamp"
+	"github.com/ironflock/nexus/v3/client"
+	nxwamp "github.com/ironflock/nexus/v3/wamp"
 )
 
 // serialExecutor runs submitted functions one at a time, in submission
