@@ -773,12 +773,11 @@ it takes the more robust variant; Go-specific choices:
 - There are no retained-event options (`get_retained`, `retain`): ironflock-router does not keep retained
   events. Raw WAMP options still pass through `SubscribeOptions.Extra` and `PublishOptions.Extra`.
 - `GetSeriesHistory` takes a method per metric (`SeriesMetric`), the series query of fleetdb v1.0.58 and later.
-  The Python and JavaScript SDKs 1.9.0 send the earlier query, which current data backends refuse.
-- Where the 1.9.0 Python and JavaScript SDKs predate the current backends, Go follows the backends: large
-  history results are reassembled from chunks (they fail with `result_too_large` there), `List` and `Iter`
-  handle the file service's folder-style listing, tcp/udp remote-access URLs read `REMOTE_PORT_FOR_<port>`, a
-  failed restore is retried while the session lasts, and a consumed app's auth denial counts only once it
-  persists.
+  The Python and JavaScript SDKs send the same query since 1.9.1 and also accept, deprecated, column names with
+  one top-level method.
+- Where the 1.9.1 Python and JavaScript SDKs predate the current platform, Go follows the platform: tcp/udp
+  remote-access URLs read `REMOTE_PORT_FOR_<port>`, a failed restore is retried while the session lasts, and a
+  consumed app's auth denial counts only once it persists.
 
 ## Development
 

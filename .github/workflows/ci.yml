@@ -62,7 +62,7 @@ jobs:
         run: |
           shellcheck -x --source-path=SCRIPTDIR integration/ironflock-router/*.sh integration/contracts/regen.sh
       - name: Install the Python SDK (brings autobahn for the fake platform)
-        run: python -m pip install ironflock==1.9.0
+        run: python -m pip install ironflock==1.9.1
       - name: The fake platform starts
         # No router: it keeps retrying the closed port. -W error turns the
         # event-loop deprecation of Python 3.12/3.13 (an error on 3.14) into a
@@ -109,7 +109,7 @@ jobs:
           python-version: "3.11"
       - name: Install the Python SDK (reference SDK and fake platform)
         # PyYAML lets start.sh verify the copied production roles.
-        run: python -m pip install ironflock==1.9.0 pyyaml==6.0.3
+        run: python -m pip install ironflock==1.9.1 pyyaml==6.0.3
       - id: gcp
         uses: google-github-actions/auth@v3
         with:

@@ -66,7 +66,7 @@ await step("publish_rows_to_table", () => ifl.publishRowsToTable("sensordata", [
   { tsp: "2026-01-01T00:00:03Z", temperature: 1 }, { tsp: "2026-01-01T00:00:04Z", temperature: 2 }], { batch: "b1" }));
 await step("append_rows_to_table", () => ifl.appendRowsToTable("sensordata", [{ tsp: "2026-01-01T00:00:05Z", temperature: 3 }]));
 await step("report_error_publish", () => ifl.reportError("Sensor timed out", { level: "warn", tsp: "2026-01-01T00:00:00Z" }));
-await step("report_error_append", () => ifl.reportError("Calibration failed", { append: true, tsp: "2026-01-01T00:00:00Z" }));
+await step("report_error_append", () => ifl.reportError("Calibration failed", { append: true, tsp: "2026-01-01T00:00:00Z", userMessage: "Please recalibrate" }));
 await step("get_history_full", () => ifl.getHistory("sensordata", {
   limit: 5, offset: 2, timeRange: ["2026-01-01T00:00:00Z", null],
   filterAnd: [{ column: "temperature", operator: ">", value: 20 }, { latest: true }],
@@ -74,7 +74,7 @@ await step("get_history_full", () => ifl.getHistory("sensordata", {
 }));
 await step("get_history_default", () => ifl.getHistory("sensordata"));
 await step("get_series_history", () => ifl.getSeriesHistory("sensordata", {
-  metrics: ["temperature"], method: "AVG", limit: 100,
+  metrics: [{ ref: "temperature", method: "AVG" }], limit: 100,
   timeRange: ["2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"], groupBy: ["device_key"],
 }));
 await step("reveal_secrets", () => ifl.revealSecrets("credentials", { limit: 1, filterAnd: [{ latest: true }] }));
@@ -111,7 +111,7 @@ await step("consumed_get_history", async () => {
 });
 await step("consumed_get_series", async () => {
   const app = await ifl.connectToApp("weather");
-  return app.getSeriesHistory("readings", { metrics: ["temp"], method: "MAX", limit: 10, timeRange: [1767225600000, null] });
+  return app.getSeriesHistory("readings", { metrics: [{ ref: "temp", method: "MAX" }], limit: 10, timeRange: [1767225600000, null] });
 });
 await step("connect_to_app_no_grant", () => ifl.connectToApp("nogrant"));
 await step("list_consumable_apps", () => ifl.listConsumableApps());

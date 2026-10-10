@@ -30,11 +30,11 @@ run use it.
 ## Quick start
 
 You need Go, Python 3.11 or newer with the `ironflock` package (the reference SDK; it brings autobahn for the fake
-platform: ironflock 1.9.0 pins autobahn 25.12.2, which needs 3.11), and either the router image and Docker or a router
+platform: ironflock 1.9.1 pins autobahn 25.12.2, which needs 3.11), and either the router image and Docker or a router
 binary. All commands run from the repository root.
 
 ```shell
-python3.11 -m venv ~/.venvs/ironflock && ~/.venvs/ironflock/bin/pip install ironflock==1.9.0   # or any python3 >= 3.11
+python3.11 -m venv ~/.venvs/ironflock && ~/.venvs/ironflock/bin/pip install ironflock==1.9.1   # or any python3 >= 3.11
 export PYTHON=~/.venvs/ironflock/bin/python
 
 # Router image (pulling it needs read access to record-1283's Artifact Registry and
@@ -275,11 +275,10 @@ colon (Python, JavaScript) or `Error: <message>` (Go).
 (`IRONFLOCK_TEST_REFERENCE`, a `py_scenario.py` output), step by step, except for the steps
 `scenario_divergences.json` lists: a JSON array of `{"step": ..., "reason": ...}` naming a step whose Go run
 deliberately differs from the reference SDK's, with the reason. Such a step still runs and must be in the reference;
-its comparison is skipped and the reason logged. Today it lists the two series steps: ironflock-py 1.9.0 sends the
-series shape fleetdb refuses since v1.0.58.
+it is compared with the payloads `scenario_test.go` documents for it (`documentedSteps`) instead, and the reason is
+logged. Today the list is empty: ironflock-py 1.9.1 records what the Go run records on every step.
 
-JavaScript (ironflock-js 1.9.0) agrees with Python on every step except `report_error_publish` and
-`report_error_append`, where it does not send `user_message`. To run it, build ironflock-js and run
+JavaScript (ironflock-js 1.9.1) agrees with Python on every step. To run it, build ironflock-js and run
 `IRONFLOCK_JS_SDK=/path/to/ironflock-js/dist/index.mjs node integration/js_scenario.mjs /tmp/js_out.json` with the
 environment of step 2. (From a container, point `IRONFLOCK_TEST_PLATFORM_URL` at the host and forward
 `127.0.0.1:<FAKE_PLATFORM_S3_PORT>` to it as well: presigned URLs name 127.0.0.1.)
@@ -346,8 +345,8 @@ environment of step 2. (From a container, point `IRONFLOCK_TEST_PLATFORM_URL` at
 - **test**: `go vet`, unit tests with `-race`, cross-builds for linux/arm, linux/arm64, linux/386, windows/amd64 and
   darwin/arm64, `go mod tidy -diff`, and golangci-lint (the same checks as `just check`).
 - **harness**: on Python 3.11 and 3.14, without a router: `test_fake_platform.py`, `test_scripts.sh`, shellcheck of
-  the harness scripts, and the fake platform starting up with `ironflock==1.9.0`.
-- **integration**: starts the harness in image mode, runs the Python reference (`ironflock==1.9.0`), package `wamp`'s
+  the harness scripts, and the fake platform starting up with `ironflock==1.9.1`.
+- **integration**: starts the harness in image mode, runs the Python reference (`ironflock==1.9.1`), package `wamp`'s
   real-router tests and the integration suite, including `TestRouterRestartRecovery` with `restart.sh`, then stops the
   harness and prints its logs on failure. The image comes from Artifact Registry through workload identity federation,
   so the job runs only once both repository variables below are set, and only for pushes and for pull requests from

@@ -30,29 +30,9 @@ type stepOut struct {
 // the reference SDK (scenario_divergences.json lists them, with the reason):
 // what the Go run must record and its error class instead of the
 // reference's. Every step the list names needs an entry here, and every
-// entry here must be on the list.
-var documentedSteps = map[string]stepOut{
-	// fleetdb's series contract since v1.0.58 (SeriesQueryArgs): metrics as
-	// {ref, method} pairs, no top-level method. The reference sends the old
-	// shape, which fleetdb refuses.
-	"get_series_history": {Recorded: []any{map[string]any{
-		"kind": "call", "uri": "history.transformed.series.sensordata", "kwargs": map[string]any{},
-		"args": []any{map[string]any{
-			"metrics":   []any{map[string]any{"ref": "temperature", "method": "AVG"}},
-			"limit":     100,
-			"timeRange": []any{"2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"},
-			"groupBy":   []any{"device_key"},
-		}},
-	}}},
-	"consumed_get_series": {Recorded: []any{map[string]any{
-		"kind": "provider-call", "uri": "history.transformed.series.readings", "kwargs": map[string]any{},
-		"args": []any{map[string]any{
-			"metrics":   []any{map[string]any{"ref": "temp", "method": "MAX"}},
-			"limit":     10,
-			"timeRange": []any{1767225600000, nil},
-		}},
-	}}},
-}
+// entry here must be on the list. None today: the reference records what the
+// Go run records on every step.
+var documentedSteps = map[string]stepOut{}
 
 // TestCrossSDKScenario runs the conformance scenario (the same steps as
 // py_scenario.py and js_scenario.mjs) and compares the recorded wire

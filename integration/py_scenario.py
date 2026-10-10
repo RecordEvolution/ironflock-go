@@ -80,7 +80,7 @@ async def main():
         "columns": ["temperature"]}))
     await step("get_history_default", lambda: ifl.getHistory("sensordata"))
     await step("get_series_history", lambda: ifl.get_series_history("sensordata", {
-        "metrics": ["temperature"], "method": "AVG", "limit": 100,
+        "metrics": [{"ref": "temperature", "method": "AVG"}], "limit": 100,
         "timeRange": ["2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"], "groupBy": ["device_key"]}))
     await step("reveal_secrets", lambda: ifl.reveal_secrets("credentials", {"limit": 1, "filterAnd": [{"latest": True}]}))
     await step("verify_secret_match", lambda: ifl.verify_secret("credentials", "api_key", "right"))
@@ -131,7 +131,7 @@ async def main():
     async def consumed_series():
         app = await ifl.connect_to_app("weather")
         return await app.get_series_history("readings", {
-            "metrics": ["temp"], "method": "MAX", "limit": 10, "timeRange": [1767225600000, None]})
+            "metrics": [{"ref": "temp", "method": "MAX"}], "limit": 10, "timeRange": [1767225600000, None]})
 
     await step("connect_to_app", lambda: ifl.connect_to_app("weather"))
     await step("consumed_get_history", consumed_history)

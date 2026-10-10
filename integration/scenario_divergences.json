@@ -1,10 +1,1 @@
-[
- {
-  "step": "get_series_history",
-  "reason": "ironflock-py 1.9.0 sends the pre-v1.0.58 series shape ({metrics: [\"temperature\"], method: \"AVG\", ...}), which fleetdb v1.4.0 refuses with wamp.error.runtime_error (typia: $input[0].metrics[0] expected SeriesMetric); the Go SDK sends {metrics: [{ref, method}], limit, timeRange, groupBy}"
- },
- {
-  "step": "consumed_get_series",
-  "reason": "ironflock-py 1.9.0 sends the pre-v1.0.58 series shape to the provider's history.transformed.series.readings, which fleetdb v1.4.0 refuses (typia); the Go SDK sends {metrics: [{ref, method}], limit, timeRange}"
- }
-]
+[]

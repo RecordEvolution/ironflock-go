@@ -244,7 +244,8 @@ func TestSeriesContract(t *testing.T) {
 		}
 	}
 
-	// The shape before fleetdb v1.0.58 (and of ironflock-py 1.9.0) is refused.
+	// The shape before fleetdb v1.0.58 (sent by ironflock-py and ironflock-js
+	// before 1.9.1) is refused.
 	_, err = ifl.Call(ctx, "history.transformed.series.sensordata", map[string]any{
 		"metrics": []any{"temperature"}, "method": "AVG", "limit": 10, "timeRange": []any{"2026-01-01T00:00:00Z", nil}})
 	if ironflock.WampURI(err) != wamp.URIRuntimeError || !strings.Contains(err.Error(), "SeriesMetric") {
