@@ -11,59 +11,151 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Vet
         run: go vet ./...
       - name: Unit tests
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: go test -race -count=1 ./...
       - name: Cross-build (devices are often 32-bit ARM)
         run: |
           for target in linux/arm linux/arm64 linux/386 windows/amd64 darwin/arm64; do
             GOOS=${target%/*} GOARCH=${target#*/} go build ./...
           done
-      - uses: golangci/golangci-lint-action@v6
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - uses: golangci/golangci-lint-action@v9
+        env:
+          # golangci-lint v2.14 needs Go >= 1.26 to build, newer than go.mod's
+          # go line; setup-go pins GOTOOLCHAIN=local, so let `go install` fetch
+          # that toolchain. Linting itself still runs against go.mod's Go.
+          GOTOOLCHAIN: auto
         with:
-          version: latest
+          version: v2.14.0
+          install-mode: goinstall
+
+  harness:
+    # The integration harness without a router (integration/README.md): the
+    # fake platform checked against the real services' contract tables, the
+    # harness scripts, and the fake platform starting up on the oldest and the
+    # newest supported Python.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Fake platform against the contract tables
+        run: python -I integration/test_fake_platform.py -v
+      - name: Harness scripts
+        run: integration/ironflock-router/test_scripts.sh
+      - name: Shellcheck
+        if: matrix.python == '3.14'
+        run: |
+          shellcheck -x --source-path=SCRIPTDIR integration/ironflock-router/*.sh integration/contracts/regen.sh
+      - name: Install the Python SDK (brings autobahn for the fake platform)
+        run: python -m pip install ironflock==1.9.1
+      - name: The fake platform starts
+        # No router: it keeps retrying the closed port. -W error turns the
+        # event-loop deprecation of Python 3.12/3.13 (an error on 3.14) into a
+        # failure.
+        run: |
+          FAKE_PLATFORM_ROUTER=ws://127.0.0.1:9/ws-svc FAKE_PLATFORM_S3_PORT=18999 \
+            python -I -W error::DeprecationWarning integration/fake_platform.py > fake_platform.log 2>&1 &
+          pid=$!
+          sleep 5
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat fake_platform.log
+            exit 1
+          fi
+          kill "$pid"
 
   integration:
-    # End-to-end against a real Crossbar router and a fake IronFlock platform;
-    # the Python SDK's run of the same scenario is the wire-level reference.
+    # End-to-end against the ironflock-router image and a fake IronFlock
+    # platform (integration/README.md); the Python SDK's run of the same
+    # scenario is the wire-level reference. Pulling the image from Artifact
+    # Registry needs workload identity federation: the job runs once the
+    # ROUTER_PULL_WIF_PROVIDER and ROUTER_PULL_SERVICE_ACCOUNT repository
+    # variables are set (integration/README.md, "CI setup"), and only for
+    # pushes and pull requests from this repository (fork pull requests get no
+    # OIDC token).
+    if: >-
+      vars.ROUTER_PULL_WIF_PROVIDER != '' && vars.ROUTER_PULL_SERVICE_ACCOUNT != '' &&
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     env:
-      DEVICE_SERIAL_NUMBER: 06a0bf96-a539-4d6a-8471-ac7adc67616e
-      SWARM_KEY: "2"
-      APP_KEY: "26"
-      ENV: DEV
-      DEVICE_KEY: "42"
-      APP_NAME: interop
-      DEVICE_NAME: interop-dev
-      IRONFLOCK_TEST_PLATFORM_URL: ws://localhost:18081/ws-ua-usr
+      ROUTER_IMAGE: ${{ vars.ROUTER_IMAGE || 'europe-docker.pkg.dev/record-1283/eu.gcr.io/ironflock-router:v0.8.1' }}
+      PYTHON: python
+      IRONFLOCK_TEST_PLATFORM_URL: ws://localhost:18082/ws-ua-usr
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Install Crossbar and the Python SDK
-        run: python -m pip install crossbar==26.7.1 ironflock==1.9.0
-      - name: Start Crossbar and the fake platform
-        run: integration/crossbar/start.sh
+      - name: Install the Python SDK (reference SDK and fake platform)
+        # PyYAML lets start.sh verify the copied production roles.
+        run: python -m pip install ironflock==1.9.1 pyyaml==6.0.3
+      - id: gcp
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.ROUTER_PULL_WIF_PROVIDER }}
+          service_account: ${{ vars.ROUTER_PULL_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+      - uses: docker/login-action@v4
+        with:
+          registry: europe-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.gcp.outputs.access_token }}
+      - name: Start ironflock-router and the fake platform
+        run: integration/ironflock-router/start.sh
       - name: Python reference run
-        working-directory: integration
-        run: IRONFLOCK_ENV_DIR=$(mktemp -d) python -I py_scenario.py "$RUNNER_TEMP/py_out.json"
+        env:
+          # The device identity the fake platform admits.
+          DEVICE_SERIAL_NUMBER: 06a0bf96-a539-4d6a-8471-ac7adc67616e
+          SWARM_KEY: "2"
+          APP_KEY: "26"
+          ENV: DEV
+          DEVICE_KEY: "42"
+          APP_NAME: interop
+          DEVICE_NAME: interop-dev
+        run: |
+          cp -R integration/ironflock-router/perapp_env "$RUNNER_TEMP/perapp_env"
+          IRONFLOCK_ENV_DIR="$RUNNER_TEMP/perapp_env" python -I integration/py_scenario.py "$RUNNER_TEMP/py_reference.json"
+      - name: Real-router tests of package wamp
+        env:
+          IRONFLOCK_TEST_ROUTER_URL: ws://localhost:18082/ws-ua-usr
+        run: go test -race -count=1 -run TestRealRouter -v ./wamp/
       - name: Integration tests
         env:
+          IRONFLOCK_TEST_ENV_DIR: ${{ github.workspace }}/integration/ironflock-router/perapp_env
+          IRONFLOCK_TEST_REFERENCE: ${{ runner.temp }}/py_reference.json
           IRONFLOCK_TEST_PYTHON: python
-          IRONFLOCK_TEST_RESTART_ROUTER: integration/crossbar/restart.sh
-        run: |
-          export IRONFLOCK_TEST_RESTART_ROUTER="$PWD/$IRONFLOCK_TEST_RESTART_ROUTER"
-          IRONFLOCK_TEST_REFERENCE="$RUNNER_TEMP/py_out.json" go test -tags integration -race -count=1 -v ./integration/...
-      - name: Logs
+          # Relative to integration/, where go test runs the test.
+          IRONFLOCK_TEST_RESTART_ROUTER: ironflock-router/restart.sh
+        run: go test -tags integration -race -count=1 -v ./integration/...
+      - name: Stop the harness
+        if: always()
+        run: integration/ironflock-router/stop.sh
+      - name: Harness logs
         if: failure()
-        run: tail -n 100 integration/crossbar/.run/*.log
+        run: |
+          for log in router fake_platform; do
+            f="integration/ironflock-router/.run/$log.log"
+            if [ -f "$f" ]; then echo "::group::$log.log"; tail -n 300 "$f"; echo "::endgroup::"; fi
+          done

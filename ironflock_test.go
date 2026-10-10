@@ -3,16 +3,24 @@ package ironflock
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/internal/env"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 func TestNewReadsTheInjectedEnvironment(t *testing.T) {
-	f := flock(t)
+	f := unstartedFlock(t)
 	if got := f.SerialNumber(); got != "test-serial-123" {
 		t.Errorf("SerialNumber = %q", got)
 	}
@@ -151,7 +159,7 @@ func TestNewReconnectWindow(t *testing.T) {
 }
 
 func TestStartConfiguresTheConnection(t *testing.T) {
-	f := flock(t)
+	f := unstartedFlock(t)
 	if err := f.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +167,7 @@ func TestStartConfiguresTheConnection(t *testing.T) {
 	if cfg.SwarmKey != 10 || cfg.AppKey != 20 || cfg.Stage != StageDevelopment {
 		t.Errorf("realm config = %d %d %q", cfg.SwarmKey, cfg.AppKey, cfg.Stage)
 	}
-	if cfg.URL != crossbar.StudioWSURI {
+	if cfg.URL != wamp.StudioWSURI {
 		t.Errorf("URL = %q", cfg.URL)
 	}
 	if cfg.SerialNumber != "test-serial-123" || cfg.AuthID != "" || cfg.AuthSecret != "" {
@@ -174,8 +182,11 @@ func TestStartConfiguresTheConnection(t *testing.T) {
 	if !f.IsConnected() {
 		t.Error("IsConnected after Start")
 	}
-	if err := f.Start(context.Background()); err == nil {
-		t.Error("a second Start must fail")
+	if err := f.Start(context.Background()); !errors.Is(err, ErrAlreadyStarted) {
+		t.Errorf("a second Start = %v, want ErrAlreadyStarted", err)
+	}
+	if f.own.startCount() != 1 || f.own.stopCount() != 0 {
+		t.Errorf("started %d, stopped %d times", f.own.startCount(), f.own.stopCount())
 	}
 }
 
@@ -186,9 +197,9 @@ func TestStartURLPrecedence(t *testing.T) {
 		opts []Option
 		want string
 	}{
-		{"default", nil, nil, crossbar.StudioWSURI},
-		{"RESWARM_URL", map[string]string{"RESWARM_URL": "http://localhost:8086"}, nil, crossbar.LocalhostWSURI},
-		{"WithReswarmURL", nil, []Option{WithReswarmURL("https://studio.ironflock.dev")}, crossbar.StudioDevWSURI},
+		{"default", nil, nil, wamp.StudioWSURI},
+		{"RESWARM_URL", map[string]string{"RESWARM_URL": "http://localhost:8086"}, nil, wamp.LocalhostWSURI},
+		{"WithReswarmURL", nil, []Option{WithReswarmURL("https://studio.ironflock.dev")}, wamp.StudioDevWSURI},
 		{"DEVICE_ENDPOINT_URL", map[string]string{"DEVICE_ENDPOINT_URL": "ws://10.0.0.1:18080/x", "RESWARM_URL": "http://localhost:8086"}, nil, "ws://10.0.0.1:18080/ws-ua-usr"},
 		{"WithURL", map[string]string{"DEVICE_ENDPOINT_URL": "ws://10.0.0.1:18080/x"}, []Option{WithURL("ws://explicit/ws")}, "ws://explicit/ws"},
 	}
@@ -222,7 +233,7 @@ func TestStartWithUnknownStudioURLFails(t *testing.T) {
 }
 
 func TestStartPassesExplicitCredentials(t *testing.T) {
-	f := flock(t, WithCredentials("app-id", "app-secret"))
+	f := unstartedFlock(t, WithCredentials("app-id", "app-secret"))
 	if err := f.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -245,33 +256,71 @@ func TestStartWithoutKeysFailsFast(t *testing.T) {
 	}
 }
 
+// A failed Start leaves the instance able to start again (a wamp.Connection
+// is configured once and restartable after a failed Start; the fake follows
+// it), whatever ended it.
 func TestStartCanBeRetriedAfterAFailure(t *testing.T) {
-	f := flock(t)
-	boom := errors.New("boom")
+	f := unstartedFlock(t)
 	failures := 1
-	f.own.startFn = func(ctx context.Context, cfg crossbar.Config) error {
+	f.own.startFn = func(ctx context.Context, cfg wamp.Config) error {
 		if failures > 0 {
 			failures--
-			return boom
+			<-ctx.Done() // the realm is not there yet
+			return fmt.Errorf("wamp: no session on realm %s: %w", cfg.Realm, ctx.Err())
 		}
 		return nil
 	}
-	if err := f.Start(context.Background()); !errors.Is(err, boom) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := f.Start(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("first Start: %v", err)
+	}
+	if f.IsConnected() {
+		t.Fatal("connected after a failed Start")
 	}
 	if err := f.Start(context.Background()); err != nil {
 		t.Fatalf("second Start: %v", err)
 	}
-	if f.own.configureCount() != 1 || f.own.startCount() != 2 {
-		t.Errorf("configured %d times, started %d times", f.own.configureCount(), f.own.startCount())
+	if !f.IsConnected() {
+		t.Error("not connected after the second Start")
+	}
+	if f.own.configureCount() != 1 || f.own.startCount() != 2 || f.own.stopCount() != 0 {
+		t.Errorf("configured %d, started %d, stopped %d times",
+			f.own.configureCount(), f.own.startCount(), f.own.stopCount())
+	}
+	if err := f.PublishToTable(bg, "sensordata", Row{"temp": 1}); err != nil {
+		t.Errorf("PublishToTable after the second Start: %v", err)
+	}
+}
+
+// Start while another Start is still running is refused with
+// ErrAlreadyStarted, and the running Start is not disturbed.
+func TestStartWhileStarting(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.own.startFn = func(context.Context, wamp.Config) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	first := make(chan error, 1)
+	go func() { first <- f.Start(context.Background()) }()
+	recv(t, entered, "the first Start")
+	if err := f.Start(context.Background()); !errors.Is(err, ErrAlreadyStarted) {
+		t.Errorf("Start while starting = %v, want ErrAlreadyStarted", err)
+	}
+	close(release)
+	if err := recv(t, first, "the first Start"); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if f.own.startCount() != 1 || !f.IsConnected() {
+		t.Errorf("started %d times, connected %v", f.own.startCount(), f.IsConnected())
 	}
 }
 
 func TestStopIsIdempotent(t *testing.T) {
 	f := flock(t)
-	if err := f.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Add(1)
@@ -289,11 +338,14 @@ func TestStopIsIdempotent(t *testing.T) {
 	if n := f.own.stopCount(); n != 1 {
 		t.Errorf("connection stopped %d times", n)
 	}
-	if err := f.Start(context.Background()); !errors.Is(err, crossbar.ErrStopped) {
+	if err := f.Start(context.Background()); !errors.Is(err, wamp.ErrStopped) {
 		t.Errorf("Start after Stop: %v", err)
 	}
-	if _, err := f.ConnectToApp(context.Background(), "weatherstation"); !errors.Is(err, crossbar.ErrStopped) {
+	if _, err := f.ConnectToApp(context.Background(), "weatherstation"); !errors.Is(err, wamp.ErrStopped) {
 		t.Errorf("ConnectToApp after Stop: %v", err)
+	}
+	if err := f.PublishToTable(bg, "sensordata", Row{"temp": 1}); !errors.Is(err, wamp.ErrStopped) {
+		t.Errorf("PublishToTable after Stop: %v", err)
 	}
 }
 
@@ -308,7 +360,7 @@ func TestStopReturnsTheConnectionError(t *testing.T) {
 
 func TestRunRunsMainAndStops(t *testing.T) {
 	checkGoroutines(t)
-	f := flock(t)
+	f := unstartedFlock(t)
 	sentinel := errors.New("main failed")
 	err := f.Run(context.Background(), func(ctx context.Context) error {
 		if !f.IsConnected() {
@@ -334,14 +386,11 @@ func TestRunRunsMainAndStops(t *testing.T) {
 
 func TestRunCancelsMainOnContextDone(t *testing.T) {
 	checkGoroutines(t)
-	f := flock(t)
+	f := unstartedFlock(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	mainCtxDone := make(chan struct{})
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
 	err := f.Run(ctx, func(ctx context.Context) error {
+		cancel()
 		<-ctx.Done()
 		close(mainCtxDone)
 		return nil
@@ -361,7 +410,7 @@ func TestRunCancelsMainOnContextDone(t *testing.T) {
 
 func TestRunWithoutMainRunsUntilContextDone(t *testing.T) {
 	checkGoroutines(t)
-	f := flock(t)
+	f := unstartedFlock(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := f.Run(ctx, nil); err != nil {
@@ -374,9 +423,9 @@ func TestRunWithoutMainRunsUntilContextDone(t *testing.T) {
 
 func TestRunReturnsTheStartError(t *testing.T) {
 	checkGoroutines(t)
-	f := flock(t)
+	f := unstartedFlock(t)
 	boom := errors.New("cannot connect")
-	f.own.startFn = func(context.Context, crossbar.Config) error { return boom }
+	f.own.startFn = func(context.Context, wamp.Config) error { return boom }
 	called := false
 	err := f.Run(context.Background(), func(context.Context) error { called = true; return nil })
 	if !errors.Is(err, boom) {
@@ -385,10 +434,13 @@ func TestRunReturnsTheStartError(t *testing.T) {
 	if called {
 		t.Error("main must not run when Start fails")
 	}
+	if f.own.stopCount() != 1 {
+		t.Error("Run did not stop the connection after the failed Start")
+	}
 }
 
 func TestRunStopsWithAFreshContext(t *testing.T) {
-	f := flock(t)
+	f := unstartedFlock(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	err := f.Run(ctx, func(context.Context) error {
 		cancel() // the caller's context is already done when Run stops
@@ -402,12 +454,162 @@ func TestRunStopsWithAFreshContext(t *testing.T) {
 	}
 }
 
-func TestFilesIsBuiltOnceAndLazily(t *testing.T) {
+// Stop ends Run, wherever it is called from: main's context is cancelled
+// and Run returns, as the Python SDK's stop() cancels the main task.
+func TestRunEndsWhenStoppedElsewhere(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	inMain := make(chan struct{})
+	ran := make(chan error, 1)
+	go func() {
+		ran <- f.Run(context.Background(), func(ctx context.Context) error {
+			close(inMain)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	recv(t, inMain, "main")
+	if err := f.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := recv(t, ran, "Run to return after Stop"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v, want main's error", err)
+	}
+	if f.own.stopCount() != 1 {
+		t.Errorf("stopped %d times", f.own.stopCount())
+	}
+}
+
+func TestRunWithoutMainEndsOnStop(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	ran := make(chan error, 1)
+	go func() { ran <- f.Run(context.Background(), nil) }()
+	eventually(t, "Run to connect", f.IsConnected)
+	if err := f.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := recv(t, ran, "Run to return after Stop"); err != nil {
+		t.Errorf("Run = %v", err)
+	}
+}
+
+// main may stop the instance itself, with its own context, which Stop
+// cancels: Stop still completes, and Run returns once main does (the Go
+// counterpart of the Python SDK's test_simple_publish_integration).
+func TestRunMainCallsStop(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	var stopErr, ctxErr error
+	release := make(chan struct{})
+	f.own.stopFn = func(ctx context.Context) error {
+		// Like the router's GOODBYE round trip: Stop waits for it within
+		// its context.
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	err := f.Run(context.Background(), func(ctx context.Context) error {
+		if err := f.Publish(ctx, "test.publish.com", "before stop"); err != nil {
+			return err
+		}
+		go func() {
+			// Release the GOODBYE only once main's context is cancelled:
+			// the Stop below must outlive that.
+			<-ctx.Done()
+			close(release)
+		}()
+		stopErr = f.Stop(ctx)
+		<-ctx.Done()
+		ctxErr = ctx.Err()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if stopErr != nil {
+		t.Errorf("Stop from main = %v", stopErr)
+	}
+	if !errors.Is(ctxErr, context.Canceled) {
+		t.Errorf("main's context: %v, want cancelled by Stop", ctxErr)
+	}
+	if f.own.stopCount() != 1 {
+		t.Errorf("stopped %d times", f.own.stopCount())
+	}
+}
+
+// Run on an instance that is started already (or whose Start is running)
+// fails with ErrAlreadyStarted and leaves it running: Run does not own it.
+func TestRunOnAStartedInstanceLeavesItRunning(t *testing.T) {
+	checkGoroutines(t)
 	f := flock(t)
+	called := false
+	err := f.Run(context.Background(), func(context.Context) error { called = true; return nil })
+	if !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatalf("Run = %v, want ErrAlreadyStarted", err)
+	}
+	if called {
+		t.Error("main ran")
+	}
+	if f.own.stopCount() != 0 || !f.IsConnected() {
+		t.Errorf("stopped %d times, connected %v", f.own.stopCount(), f.IsConnected())
+	}
+}
+
+func TestSecondRunDoesNotStopTheFirst(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inMain := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- f.Run(ctx, func(ctx context.Context) error {
+			close(inMain)
+			<-ctx.Done()
+			return nil
+		})
+	}()
+	recv(t, inMain, "the first Run's main")
+	if err := f.Run(context.Background(), func(context.Context) error { return nil }); !errors.Is(err, ErrAlreadyStarted) {
+		t.Errorf("second Run = %v, want ErrAlreadyStarted", err)
+	}
+	if f.own.stopCount() != 0 || !f.IsConnected() {
+		t.Errorf("the second Run stopped the first one's connection (stops %d)", f.own.stopCount())
+	}
+	cancel()
+	if err := recv(t, first, "the first Run"); err != nil {
+		t.Errorf("first Run = %v", err)
+	}
+	if f.own.stopCount() != 1 {
+		t.Errorf("stopped %d times", f.own.stopCount())
+	}
+}
+
+func TestRunAfterStop(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	if err := f.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	err := f.Run(context.Background(), func(context.Context) error {
+		t.Error("main ran after Stop")
+		return nil
+	})
+	if !errors.Is(err, wamp.ErrStopped) {
+		t.Errorf("Run after Stop = %v, want ErrStopped", err)
+	}
+}
+
+func TestFilesIsBuiltOnceAndLazily(t *testing.T) {
+	f := unstartedFlock(t)
 	if f.files != nil {
 		t.Fatal("Files built before first use")
 	}
-	first := filesOrSkip(t, f.IronFlock)
+	first := f.Files()
 	var wg sync.WaitGroup
 	got := make([]*FileStore, 8)
 	for i := range got {
@@ -425,22 +627,7 @@ func TestFilesIsBuiltOnceAndLazily(t *testing.T) {
 	}
 }
 
-// filesOrSkip returns f.Files(), skipping the test while filestore.New is
-// still a stub.
-func filesOrSkip(t *testing.T, f *IronFlock) (fs *FileStore) {
-	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			if s, ok := r.(string); ok && strings.Contains(s, "TODO") {
-				t.Skip("filestore.New is not implemented yet")
-			}
-			panic(r)
-		}
-	}()
-	return f.Files()
-}
-
-func TestNewUsesACrossbarConnection(t *testing.T) {
+func TestNewUsesAWampConnection(t *testing.T) {
 	setIdentityEnv(t)
 	log, _ := newTestLogger()
 	f, err := New(WithLogger(log))
@@ -448,14 +635,477 @@ func TestNewUsesACrossbarConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.Connection() == nil {
-		t.Error("Connection() must expose the *crossbar.Connection")
+		t.Error("Connection() must expose the *wamp.Connection")
 	}
-	if c, ok := f.newConn().(*crossbar.Connection); !ok || c == nil || c == f.Connection() {
+	if c, ok := f.newConn().(*wamp.Connection); !ok || c == nil || c == f.Connection() {
 		t.Error("consumed apps must get connections of their own")
 	}
 
 	unsetEnv(t, "DEVICE_SERIAL_NUMBER")
 	if _, err := New(); !errors.Is(err, ErrMissingConfig) {
 		t.Errorf("New without a serial number: %v", err)
+	}
+}
+
+// gatedOp is an operation run on an IronFlock that has not been started.
+type gatedOp struct {
+	name string
+	// table is set for table operations, which wait within the reconnect
+	// window; the others wait the default session wait.
+	table bool
+	do    func(f *testFlock) error
+}
+
+func gatedOps() []gatedOp {
+	noop := func(context.Context, *Invocation) (any, error) { return nil, nil }
+	q := &TableQueryParams{Limit: 1}
+	return []gatedOp{
+		{"PublishToTable", true, func(f *testFlock) error { return f.PublishToTable(bg, "sensordata", Row{"temp": 1}) }},
+		{"PublishRowsToTable", true, func(f *testFlock) error {
+			return f.PublishRowsToTable(bg, "sensordata", []Row{{"temp": 1}})
+		}},
+		{"AppendToTable", true, func(f *testFlock) error {
+			_, err := f.AppendToTable(bg, "sensordata", Row{"temp": 1})
+			return err
+		}},
+		{"AppendRowsToTable", true, func(f *testFlock) error {
+			_, err := f.AppendRowsToTable(bg, "sensordata", []Row{{"temp": 1}})
+			return err
+		}},
+		{"ReportError", true, func(f *testFlock) error {
+			_, err := f.ReportError(bg, "boom")
+			return err
+		}},
+		{"GetHistory", true, func(f *testFlock) error {
+			_, err := f.GetHistory(bg, "sensordata", q)
+			return err
+		}},
+		{"GetSeriesHistory", true, func(f *testFlock) error {
+			_, err := f.GetSeriesHistory(bg, "sensordata", SeriesQueryParams{
+				Metrics: []SeriesMetric{{"temp", MethodAvg}}, Limit: 1, TimeRange: &TimeRange{Start: int64(0)}})
+			return err
+		}},
+		{"RevealSecrets", true, func(f *testFlock) error {
+			_, err := f.RevealSecrets(bg, "sensordata", q)
+			return err
+		}},
+		{"VerifySecret", true, func(f *testFlock) error {
+			_, err := f.VerifySecret(bg, "sensordata", "pin", "1234", q)
+			return err
+		}},
+		{"Publish", false, func(f *testFlock) error { return f.Publish(bg, "com.example.topic", 1) }},
+		{"Call", false, func(f *testFlock) error {
+			_, err := f.Call(bg, "com.example.procedure")
+			return err
+		}},
+		{"CallDeviceFunction", false, func(f *testFlock) error {
+			_, err := f.CallDeviceFunction(bg, 13, "toggle")
+			return err
+		}},
+		{"SetDeviceLocation", false, func(f *testFlock) error {
+			_, err := f.SetDeviceLocation(bg, 8.4, 49.0)
+			return err
+		}},
+		{"Subscribe", false, func(f *testFlock) error {
+			_, err := f.Subscribe(bg, "com.example.topic", func(*Event) {})
+			return err
+		}},
+		{"SubscribeToTable", false, func(f *testFlock) error {
+			_, err := f.SubscribeToTable(bg, "sensordata", func(*Event) {})
+			return err
+		}},
+		{"RegisterDeviceFunction", false, func(f *testFlock) error {
+			_, err := f.RegisterDeviceFunction(bg, "toggle", noop)
+			return err
+		}},
+		{"ListConsumableApps", false, func(f *testFlock) error {
+			_, err := f.ListConsumableApps(bg)
+			return err
+		}},
+		{"ConnectToApp", false, func(f *testFlock) error {
+			_, err := f.ConnectToApp(bg, "weatherstation")
+			return err
+		}},
+		{"Files().Catalog", false, func(f *testFlock) error {
+			_, err := f.Files().Catalog(bg)
+			return err
+		}},
+	}
+}
+
+// answerServices makes the own fake connection answer the platform services
+// the gated operations call.
+func answerServices(c *fakeConn) {
+	c.callFn = func(call fakeCall) (*wamp.Result, error) {
+		switch call.Procedure {
+		case uriAppAccessResolve:
+			return resultOf(resolveResult()), nil
+		case uriAppAccessList:
+			return resultOf(listResult()), nil
+		case "files.read.namespaces":
+			return resultOf(map[string]any{"success": true, "payload": map[string]any{
+				"namespaces": []any{map[string]any{"name": "default"}}}}), nil
+		}
+		return &wamp.Result{}, nil
+	}
+}
+
+// traffic counts the operations that reached c.
+func traffic(c *fakeConn) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls) + len(c.publishes) + len(c.subs) + len(c.regs)
+}
+
+// An operation issued before Start waits for Start instead of failing, and
+// goes through once Start has configured the connection.
+func TestOperationsBeforeStartWaitForIt(t *testing.T) {
+	checkGoroutines(t)
+	for _, op := range gatedOps() {
+		t.Run(op.name, func(t *testing.T) {
+			f := unstartedFlock(t)
+			answerServices(f.own)
+			done := make(chan error, 1)
+			go func() { done <- op.do(f) }()
+			eventually(t, "the operation to wait for Start", func() bool { return f.startWaiters.Load() == 1 })
+			if n := traffic(f.own); n != 0 {
+				t.Fatalf("%d operations reached the connection before Start", n)
+			}
+			f.start(t)
+			if err := recv(t, done, op.name); err != nil {
+				t.Fatalf("%s: %v", op.name, err)
+			}
+			if traffic(f.own) == 0 {
+				t.Fatal("nothing reached the connection")
+			}
+			if n := f.startWaiters.Load(); n != 0 {
+				t.Errorf("%d operations still waiting", n)
+			}
+		})
+	}
+}
+
+// The wait for Start counts against the operation's window: what is left of
+// it is the connection's wait for a session (and a table call's retry
+// window).
+func TestOperationsBeforeStartKeepTheirWindow(t *testing.T) {
+	const window = time.Hour
+	f := unstartedFlock(t, WithReconnectWindow(window))
+	answerServices(f.own)
+	errs := make(chan error, 3)
+	go func() { errs <- f.PublishToTable(bg, "sensordata", Row{"temp": 1}) }()
+	go func() {
+		_, err := f.AppendToTable(bg, "sensordata", Row{"temp": 1})
+		errs <- err
+	}()
+	go func() {
+		_, err := f.Call(bg, "com.example.procedure")
+		errs <- err
+	}()
+	eventually(t, "the operations to wait for Start", func() bool { return f.startWaiters.Load() == 3 })
+	f.start(t)
+	for range 3 {
+		if err := recv(t, errs, "an operation"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	within := func(d, of time.Duration) bool { return d > of-5*time.Second && d <= of }
+	if w := f.own.lastPublish(t).Window; !within(w, window) {
+		t.Errorf("PublishToTable waits %v for a session, want what is left of %v", w, window)
+	}
+	for _, c := range f.own.allCalls() {
+		switch c.Procedure {
+		case "append.10.20.sensordata":
+			if !within(c.Window, window) {
+				t.Errorf("AppendToTable retries for %v, want what is left of %v", c.Window, window)
+			}
+		case "com.example.procedure":
+			if c.Window != 0 {
+				t.Errorf("Call has a retry window: %v", c.Window)
+			}
+		}
+	}
+	// A plain call waits for the session separately, and is not retried.
+	f.own.mu.Lock()
+	waits := slices.Clone(f.own.waits)
+	f.own.mu.Unlock()
+	if len(waits) != 1 || !within(waits[0], wamp.DefaultSessionWaitTimeout) {
+		t.Errorf("session waits %v, want one of what is left of %v", waits, wamp.DefaultSessionWaitTimeout)
+	}
+}
+
+// When Start does not come within the window, the operation fails as one
+// that found no session does: with an error wrapping wamp.ErrNotConnected.
+func TestOperationsBeforeStartTimeOut(t *testing.T) {
+	checkGoroutines(t)
+	const window, sessionWait = 80 * time.Millisecond, 40 * time.Millisecond
+	for _, op := range gatedOps() {
+		t.Run(op.name, func(t *testing.T) {
+			f := unstartedFlock(t, WithReconnectWindow(window))
+			f.sessionWait = sessionWait
+			want := sessionWait
+			if op.table {
+				want = window
+			}
+			began := time.Now()
+			err := op.do(f)
+			took := time.Since(began)
+			if !errors.Is(err, wamp.ErrNotConnected) || errors.Is(err, wamp.ErrNotConfigured) {
+				t.Fatalf("%s = %v, want an error wrapping ErrNotConnected", op.name, err)
+			}
+			mustContain(t, err.Error(), "the connection was not started within "+want.String())
+			if took < want {
+				t.Errorf("%s failed after %v, before its window of %v", op.name, took, want)
+			}
+		})
+	}
+	// Without a reconnect window, table operations wait the default.
+	f := unstartedFlock(t, WithReconnectWindow(0))
+	f.sessionWait = sessionWait
+	err := f.PublishToTable(bg, "sensordata", Row{"temp": 1})
+	if !errors.Is(err, wamp.ErrNotConnected) || !strings.Contains(err.Error(), "within "+sessionWait.String()) {
+		t.Errorf("PublishToTable without a reconnect window = %v", err)
+	}
+}
+
+// Stop wakes the operations waiting for Start: they fail with an error
+// wrapping wamp.ErrStopped, as do operations issued after it.
+func TestStopWakesOperationsWaitingForStart(t *testing.T) {
+	checkGoroutines(t)
+	for _, op := range gatedOps() {
+		t.Run(op.name, func(t *testing.T) {
+			f := unstartedFlock(t)
+			done := make(chan error, 1)
+			go func() { done <- op.do(f) }()
+			eventually(t, "the operation to wait for Start", func() bool { return f.startWaiters.Load() == 1 })
+			if err := f.Stop(bg); err != nil {
+				t.Fatal(err)
+			}
+			if err := recv(t, done, op.name); !errors.Is(err, wamp.ErrStopped) {
+				t.Errorf("%s woken by Stop = %v, want ErrStopped", op.name, err)
+			}
+			if err := op.do(f); !errors.Is(err, wamp.ErrStopped) {
+				t.Errorf("%s after Stop = %v, want ErrStopped", op.name, err)
+			}
+			if n := traffic(f.own); n != 0 {
+				t.Errorf("%d operations reached the connection", n)
+			}
+		})
+	}
+}
+
+// An operation waiting for Start gives up when its context ends.
+func TestOperationsWaitingForStartHonourTheirContext(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan error, 1)
+	go func() { done <- f.PublishToTable(ctx, "sensordata", Row{"temp": 1}) }()
+	eventually(t, "the operation to wait for Start", func() bool { return f.startWaiters.Load() == 1 })
+	cancel()
+	if err := recv(t, done, "PublishToTable"); !errors.Is(err, context.Canceled) {
+		t.Errorf("PublishToTable = %v, want context.Canceled", err)
+	}
+	if n := f.startWaiters.Load(); n != 0 {
+		t.Errorf("%d operations still waiting", n)
+	}
+}
+
+// Start configures the connection once, even when it fails: operations
+// issued after a failed Start wait for the connection, within their window,
+// and are served by the next Start.
+func TestOperationsAfterAFailedStartWaitForTheNextOne(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	fail := true
+	f.own.startFn = func(ctx context.Context, cfg wamp.Config) error {
+		if fail {
+			return fmt.Errorf("wamp: no session on realm %s: %w", cfg.Realm, context.DeadlineExceeded)
+		}
+		return nil
+	}
+	if err := f.Start(bg); err == nil {
+		t.Fatal("the first Start succeeded")
+	}
+	fail = false
+	done := make(chan error, 1)
+	go func() { done <- f.PublishToTable(bg, "sensordata", Row{"temp": 1}) }()
+	eventually(t, "the publication to wait for a session", func() bool {
+		f.own.mu.Lock()
+		defer f.own.mu.Unlock()
+		return f.own.up != nil // the fake's session wait has begun
+	})
+	f.start(t)
+	if err := recv(t, done, "PublishToTable"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.startWaiters.Load(); n != 0 {
+		t.Errorf("%d operations waited for Start", n)
+	}
+}
+
+// persistConnGoroutines counts the goroutines of pooled HTTP connections.
+func persistConnGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	return strings.Count(string(buf), "net/http.(*persistConn)")
+}
+
+// Stop closes the keep-alive connections the store Files returns keeps idle
+// after a direct transfer, and with them their goroutines, while the object
+// store keeps them open.
+func TestStopClosesTheFileStoresIdleConnections(t *testing.T) {
+	objects := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, 100))
+	}))
+	defer objects.Close()
+	f := flock(t)
+	f.own.callFn = func(c fakeCall) (*wamp.Result, error) {
+		switch c.Procedure {
+		case "files.read.namespaces":
+			return resultOf(map[string]any{"success": true, "payload": map[string]any{
+				"namespaces":        []any{map[string]any{"name": "default"}},
+				"inline_max_bytes":  int64(10),
+				"presign_available": true,
+				"presign_max_bytes": int64(5 << 30),
+			}}), nil
+		case "files.read.get":
+			return resultOf(map[string]any{"success": false, "code": "TOO_LARGE", "reason": "too big"}), nil
+		case "files.read.url":
+			return resultOf(map[string]any{"success": true, "payload": map[string]any{"url": objects.URL + "/get", "method": "GET"}}), nil
+		}
+		return &wamp.Result{}, nil
+	}
+	data, err := f.Files().Get(bg, "big.bin")
+	if err != nil || len(data) != 100 {
+		t.Fatalf("Get: %d bytes, %v", len(data), err)
+	}
+	if persistConnGoroutines() == 0 {
+		t.Fatal("no pooled connection after the direct download")
+	}
+	if err := f.Stop(bg); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the pooled connections to close", func() bool { return persistConnGoroutines() == 0 })
+}
+
+// The connection reads the per-app credential from the device agent's
+// /data/env mirror on every attempt, and the agent makes it readable by root
+// only: in a container that runs as another user Start says so, once, on the
+// app's logger.
+func TestStartWarnsWhenTheCredentialMirrorIsUnreadable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permissions do not apply to this process")
+	}
+	env.ResetWarning()
+	t.Cleanup(env.ResetWarning)
+	f := unstartedFlock(t)
+	unreadable := filepath.Join(os.Getenv("IRONFLOCK_ENV_DIR"), "APP_AUTH_SECRET.txt")
+	if err := os.WriteFile(unreadable, []byte("rotated"), 0); err != nil {
+		t.Fatal(err)
+	}
+	f.start(t)
+	if n := strings.Count(f.logs.String(), "level=WARN"); n != 1 {
+		t.Fatalf("%d warnings, want 1:\n%s", n, f.logs)
+	}
+	mustContain(t, f.logs.String(), "APP_AUTH_SECRET.txt: permission denied", "using the environment the container started with")
+
+	// An explicit credential does not come from the mirror.
+	env.ResetWarning()
+	explicit := newTestFlock(t, WithCredentials("id", "secret"))
+	explicit.start(t)
+	if strings.Contains(explicit.logs.String(), "level=WARN") {
+		t.Errorf("warned with explicit credentials:\n%s", explicit.logs)
+	}
+}
+
+// Stop recognizes main's context per instance: when another IronFlock's Run
+// runs inside main, Stop with the inner main's context — which the outer
+// Stop cancels too — still completes its shutdown.
+func TestRunNestedStopWithTheInnerMainsContext(t *testing.T) {
+	checkGoroutines(t)
+	outer := unstartedFlock(t)
+	inner := newTestFlock(t)
+	var stopErr error
+	release := make(chan struct{})
+	outer.own.stopFn = func(ctx context.Context) error {
+		<-release // the router's GOODBYE
+		return ctx.Err()
+	}
+	err := outer.Run(context.Background(), func(octx context.Context) error {
+		return inner.Run(octx, func(ictx context.Context) error {
+			go func() {
+				<-ictx.Done() // the outer Stop cancels the inner main's context too
+				close(release)
+			}()
+			stopErr = outer.Stop(ictx)
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if stopErr != nil {
+		t.Errorf("outer.Stop(inner main's context) = %v, want a complete shutdown", stopErr)
+	}
+	if outer.own.stopCount() != 1 || inner.own.stopCount() != 1 {
+		t.Errorf("stopped outer %d, inner %d times", outer.own.stopCount(), inner.own.stopCount())
+	}
+}
+
+// main's context inherits the deadline of Run's context and is cancelled by
+// Stop: a Stop with main's context is bounded only by the run stop timeout,
+// like the Stop Run performs after main, also once that deadline has passed.
+func TestRunMainStopsAfterTheRunDeadline(t *testing.T) {
+	checkGoroutines(t)
+	f := unstartedFlock(t)
+	var stopCtxErr error
+	f.own.stopFn = func(ctx context.Context) error {
+		stopCtxErr = ctx.Err()
+		if _, ok := ctx.Deadline(); !ok {
+			return errors.New("Stop is not bounded")
+		}
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	var stopErr error
+	err := f.Run(ctx, func(ctx context.Context) error {
+		<-ctx.Done()
+		stopErr = f.Stop(ctx)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if stopErr != nil || stopCtxErr != nil {
+		t.Errorf("Stop(main's context after its deadline) = %v, its context %v; want a live context", stopErr, stopCtxErr)
+	}
+
+	// A deadline main sets itself does not cut the shutdown short either.
+	g := unstartedFlock(t)
+	var deadline time.Time
+	g.own.stopFn = func(ctx context.Context) error {
+		deadline, _ = ctx.Deadline()
+		return ctx.Err()
+	}
+	err = g.Run(context.Background(), func(ctx context.Context) error {
+		short, cancel := context.WithTimeout(ctx, time.Millisecond)
+		defer cancel()
+		<-short.Done()
+		return g.Stop(short)
+	})
+	if err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if left := time.Until(deadline); left < g.runStopTimeout/2 {
+		t.Errorf("Stop was bounded by main's deadline: %v left", left)
 	}
 }

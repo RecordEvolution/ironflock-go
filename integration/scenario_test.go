@@ -26,9 +26,19 @@ type stepOut struct {
 	Error    any `json:"error"`
 }
 
+// documentedSteps are the steps where the Go SDK deliberately differs from
+// the reference SDK (scenario_divergences.json lists them, with the reason):
+// what the Go run must record and its error class instead of the
+// reference's. Every step the list names needs an entry here, and every
+// entry here must be on the list. None today: the reference records what the
+// Go run records on every step.
+var documentedSteps = map[string]stepOut{}
+
 // TestCrossSDKScenario runs the conformance scenario (the same steps as
 // py_scenario.py and js_scenario.mjs) and compares the recorded wire
-// payloads with the Python SDK's reference output.
+// payloads and error classes with the Python SDK's reference output; the
+// steps scenario_divergences.json lists are compared with documentedSteps
+// instead.
 func TestCrossSDKScenario(t *testing.T) {
 	url := platformURL(t)
 	deviceEnv(t)
@@ -43,9 +53,14 @@ func TestCrossSDKScenario(t *testing.T) {
 	if err := ifl.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	defer ifl.Stop(context.Background())
+	defer func() {
+		if err := ifl.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	}()
 
 	out := map[string]stepOut{}
+	var steps []string
 	step := func(name string, fn func() (any, error)) {
 		t.Helper()
 		if _, err := ifl.Call(ctx, "test.reset"); err != nil {
@@ -62,6 +77,7 @@ func TestCrossSDKScenario(t *testing.T) {
 			t.Fatalf("%s: recorded: %v", name, rerr)
 		}
 		out[name] = stepOut{Recorded: rec.Value(), Result: jsonable(result), Error: errClass}
+		steps = append(steps, name)
 	}
 	clearRecorded := func() {
 		if _, err := ifl.Call(ctx, "test.clear_recorded"); err != nil {
@@ -71,6 +87,8 @@ func TestCrossSDKScenario(t *testing.T) {
 	files := ifl.Files()
 	keepFiles := func(fn func() (any, error)) func() (any, error) {
 		return func() (any, error) {
+			// test.reset empties the store: put the object again, then
+			// clear only the recordings.
 			if _, err := files.Put(ctx, "a/b c.txt", []byte("hello"), filestore.ContentType("text/plain")); err != nil {
 				return nil, err
 			}
@@ -80,22 +98,30 @@ func TestCrossSDKScenario(t *testing.T) {
 	}
 	none := func(err error) (any, error) { return nil, err }
 
+	// Every row carries tsp: fleetdb refuses an append without one and drops
+	// such a publish. A kwargs-only publish reaches fleetdb without args[0],
+	// so a table with the default column paths drops it too.
 	step("publish_to_table_row", func() (any, error) {
-		return none(ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"temperature": 22.5, "n": 3}))
+		return none(ifl.PublishToTable(ctx, "sensordata", ironflock.Row{"tsp": "2026-01-01T00:00:01Z", "temperature": 22.5, "n": 3}))
 	})
 	step("publish_to_table_kwargs", func() (any, error) {
 		return none(ifl.PublishToTable(ctx, "sensordata", ironflock.Kwargs{"temperature": 1.5}))
 	})
 	step("append_to_table", func() (any, error) {
+		r, err := ifl.AppendToTable(ctx, "sensordata", ironflock.Row{"tsp": "2026-01-01T00:00:02Z", "temperature": 23})
+		return r.Value(), err
+	})
+	step("append_without_tsp", func() (any, error) {
 		r, err := ifl.AppendToTable(ctx, "sensordata", ironflock.Row{"temperature": 23})
 		return r.Value(), err
 	})
 	step("publish_rows_to_table", func() (any, error) {
 		return none(ifl.PublishRowsToTable(ctx, "sensordata",
-			[]ironflock.Row{{"temperature": 1}, {"temperature": 2}}, ironflock.Kwargs{"batch": "b1"}))
+			[]ironflock.Row{{"tsp": "2026-01-01T00:00:03Z", "temperature": 1}, {"tsp": "2026-01-01T00:00:04Z", "temperature": 2}},
+			ironflock.Kwargs{"batch": "b1"}))
 	})
 	step("append_rows_to_table", func() (any, error) {
-		r, err := ifl.AppendRowsToTable(ctx, "sensordata", []ironflock.Row{{"temperature": 3}})
+		r, err := ifl.AppendRowsToTable(ctx, "sensordata", []ironflock.Row{{"tsp": "2026-01-01T00:00:05Z", "temperature": 3}})
 		return r.Value(), err
 	})
 	step("report_error_publish", func() (any, error) {
@@ -117,7 +143,7 @@ func TestCrossSDKScenario(t *testing.T) {
 	step("get_history_default", func() (any, error) { return ifl.GetHistory(ctx, "sensordata", nil) })
 	step("get_series_history", func() (any, error) {
 		return ifl.GetSeriesHistory(ctx, "sensordata", ironflock.SeriesQueryParams{
-			Metrics: []string{"temperature"}, Method: ironflock.MethodAvg, Limit: 100,
+			Metrics: []ironflock.SeriesMetric{{Ref: "temperature", Method: ironflock.MethodAvg}}, Limit: 100,
 			TimeRange: &ironflock.TimeRange{Start: "2026-01-01T00:00:00Z", End: "2026-02-01T00:00:00Z"},
 			GroupBy:   []string{"device_key"},
 		})
@@ -143,7 +169,14 @@ func TestCrossSDKScenario(t *testing.T) {
 		return files.Put(ctx, "a/b c.txt", []byte("hello"), filestore.ContentType("text/plain"))
 	})
 	step("files_get_inline", keepFiles(func() (any, error) { return files.Get(ctx, "a/b c.txt") }))
+	// fleetfiles lists folder-style and refuses a prefix ending in "/" (INTERNAL).
 	step("files_list", keepFiles(func() (any, error) { return files.List(ctx, filestore.Prefix("a/")) }))
+	step("files_list_root", func() (any, error) {
+		if _, err := files.Put(ctx, "top.txt", []byte("top"), filestore.ContentType("text/plain")); err != nil {
+			return nil, err
+		}
+		return keepFiles(func() (any, error) { return files.List(ctx) })()
+	})
 	step("files_stat", keepFiles(func() (any, error) { return files.Stat(ctx, "a/b c.txt") }))
 	step("files_exists_missing", func() (any, error) { return files.Exists(ctx, "missing.txt") })
 	step("files_copy", keepFiles(func() (any, error) {
@@ -161,7 +194,10 @@ func TestCrossSDKScenario(t *testing.T) {
 		return files.Get(ctx, "big.bin")
 	})
 	step("files_usage_detail", func() (any, error) { return files.Usage(ctx, filestore.Detail()) })
-	step("files_share_url", func() (any, error) { return files.ShareURL(ctx, "a/b c.txt", filestore.TTL(120*time.Second)) })
+	// files.read.url stats the object before it mints a URL.
+	step("files_share_url", keepFiles(func() (any, error) {
+		return files.ShareURL(ctx, "a/b c.txt", filestore.TTL(120*time.Second))
+	}))
 	step("files_upload_url", func() (any, error) {
 		return files.UploadURL(ctx, "u.bin", filestore.TTL(60*time.Second),
 			filestore.ContentType("application/octet-stream"), filestore.Size(10))
@@ -182,7 +218,7 @@ func TestCrossSDKScenario(t *testing.T) {
 			return nil, err
 		}
 		return app.GetSeriesHistory(ctx, "readings", ironflock.SeriesQueryParams{
-			Metrics: []string{"temp"}, Method: ironflock.MethodMax, Limit: 10,
+			Metrics: []ironflock.SeriesMetric{{Ref: "temp", Method: ironflock.MethodMax}}, Limit: 10,
 			TimeRange: &ironflock.TimeRange{Start: int64(1767225600000)},
 		})
 	})
@@ -196,6 +232,23 @@ func TestCrossSDKScenario(t *testing.T) {
 	}
 	if err := os.WriteFile(outPath, data, 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// The documented steps hold whether or not there is a reference.
+	divergent := divergences(t)
+	for _, name := range sortedKeys(documentedSteps) {
+		got, ran := out[name]
+		if !ran {
+			t.Errorf("%s: a documented step missing from the Go run", name)
+			continue
+		}
+		want := documentedSteps[name]
+		if a, b := canonical(want.Recorded), canonical(got.Recorded); a != b {
+			t.Errorf("%s: wire payloads differ from the documented ones\n documented: %s\n go:         %s", name, a, b)
+		}
+		if fmt.Sprint(want.Error) != fmt.Sprint(got.Error) {
+			t.Errorf("%s: error %v, documented %v", name, got.Error, want.Error)
+		}
 	}
 
 	refPath := os.Getenv("IRONFLOCK_TEST_REFERENCE")
@@ -215,15 +268,19 @@ func TestCrossSDKScenario(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	names := make([]string, 0, len(ref))
-	for name := range ref {
-		names = append(names, name)
+	for _, name := range steps {
+		if _, ok := ref[name]; !ok {
+			t.Errorf("%s: step missing from the reference", name)
+		}
 	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range sortedKeys(ref) {
 		g, ok := got[name]
 		if !ok {
 			t.Errorf("%s: step missing from the Go run", name)
+			continue
+		}
+		if reason, ok := divergent[name]; ok {
+			t.Logf("%s: compared with its documented payloads, not the reference's (%s)", name, reason)
 			continue
 		}
 		if a, b := canonical(ref[name].Recorded), canonical(g.Recorded); a != b {
@@ -235,8 +292,52 @@ func TestCrossSDKScenario(t *testing.T) {
 	}
 }
 
+// divergences reads scenario_divergences.json, the steps whose Go run
+// deliberately differs from the reference SDK's, with the reason, and checks
+// that it names exactly the steps of documentedSteps.
+func divergences(t *testing.T) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile("scenario_divergences.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list []struct {
+		Step   string `json:"step"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatalf("scenario_divergences.json: %v", err)
+	}
+	out := map[string]string{}
+	for _, d := range list {
+		if d.Step == "" || d.Reason == "" {
+			t.Errorf("scenario_divergences.json: an entry without a step or a reason: %+v", d)
+		}
+		out[d.Step] = d.Reason
+		if _, ok := documentedSteps[d.Step]; !ok {
+			t.Errorf("%s: listed in scenario_divergences.json, but scenario_test.go documents no payloads for it", d.Step)
+		}
+	}
+	for name := range documentedSteps {
+		if _, ok := out[name]; !ok {
+			t.Errorf("%s: documented in scenario_test.go, but not listed in scenario_divergences.json", name)
+		}
+	}
+	return out
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // errorClass renders an error the way the reference drivers do:
-// "<Type>: <code>".
+// "<Type>: <code>" for the typed errors, "WampError: <uri>" for a WAMP
+// error from the router or a backend.
 func errorClass(err error) string {
 	var cerr *ironflock.CrossAppAccessError
 	if errors.As(err, &cerr) {
@@ -245,6 +346,9 @@ func errorClass(err error) string {
 	var ferr *filestore.Error
 	if errors.As(err, &ferr) {
 		return "FileStoreError: " + ferr.Code
+	}
+	if uri := ironflock.WampURI(err); uri != "" {
+		return "WampError: " + uri
 	}
 	return "Error: " + err.Error()
 }

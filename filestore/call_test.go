@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // Failures arrive inside a successful WAMP result, so a call that ignored
@@ -18,7 +19,8 @@ func TestEnvelopeFailuresAreTypedCodes(t *testing.T) {
 	fs, _ := newStore(t, map[string]any{URIStat: fail(CodeNoSuchObject, "dataplane: no such object")})
 
 	_, err := fs.Stat(ctx, "nope", Namespace("frames"))
-	fe := wantError(t, err, CodeNoSuchObject, "dataplane: no such object")
+	wantError(t, err, CodeNoSuchObject, "dataplane: no such object")
+	fe := fileError(t, err)
 	if got, want := fe.Error(), "NO_SUCH_OBJECT: dataplane: no such object"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
@@ -49,7 +51,8 @@ func TestEnvelopeDefaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs, _ := newStore(t, map[string]any{URIUsage: tc.reply})
 			_, err := fs.Usage(ctx)
-			fe := wantError(t, err, tc.wantCode, "")
+			wantError(t, err, tc.wantCode, "")
+			fe := fileError(t, err)
 			if fe.Reason != tc.wantReason {
 				t.Errorf("reason = %q, want %q", fe.Reason, tc.wantReason)
 			}
@@ -66,8 +69,8 @@ func TestNonObjectResultIsInternal(t *testing.T) {
 		reply any
 		typ   string
 	}{
-		{&crossbar.Result{}, "null"},
-		{&crossbar.Result{Args: []any{nil}}, "null"},
+		{&wamp.Result{}, "null"},
+		{&wamp.Result{Args: []any{nil}}, "null"},
 		{[]any{map[string]any{"success": true}}, "array"},
 		{"ok", "string"},
 		{int64(1), "number"},
@@ -124,25 +127,28 @@ func TestWampErrorMapping(t *testing.T) {
 		wantCode   string
 		wantReason string
 	}{
-		{crossbar.ErrURINoSuchProcedure, nil, CodeNotAvailable,
+		{wamp.URINoSuchProcedure, nil, CodeNotAvailable,
 			"the file service is not available on this deployment"},
-		{crossbar.ErrURINoSuchProcedure, []any{"no callee for files.read.usage"}, CodeNotAvailable,
+		{wamp.URINoSuchProcedure, []any{"no callee for files.read.usage"}, CodeNotAvailable,
 			`the file service is not available on this deployment: "no callee for files.read.usage"`},
-		{crossbar.ErrURINotAuthorized, nil, CodeNotAuthorized, "wamp.error.not_authorized"},
-		{crossbar.ErrURINotAuthorized, []any{map[string]any{"why": "<role> & more"}}, CodeNotAuthorized,
+		{wamp.URINotAuthorized, nil, CodeNotAuthorized, "wamp.error.not_authorized"},
+		{wamp.URINotAuthorized, []any{map[string]any{"why": "<role> & more"}}, CodeNotAuthorized,
 			`wamp.error.not_authorized: {"why":"<role> & more"}`},
-		{crossbar.ErrURIAuthorizationFailed, []any{"first", "second"}, CodeNotAuthorized,
+		{wamp.URIAuthorizationFailed, []any{"first", "second"}, CodeNotAuthorized,
 			`wamp.error.authorization_failed: "first"`},
-		{crossbar.ErrURIAuthenticationFail, []any{int64(3)}, CodeNotAuthorized,
+		{wamp.URIAuthenticationFailed, []any{int64(3)}, CodeNotAuthorized,
 			"wamp.error.authentication_failed: 3"},
+		// JSON cannot encode NaN: the detail falls back to %v.
+		{wamp.URINotAuthorized, []any{math.NaN(), "x"}, CodeNotAuthorized,
+			"wamp.error.not_authorized: NaN"},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s/%d", tc.uri, len(tc.args)), func(t *testing.T) {
-			we := &crossbar.WampError{URI: tc.uri, Args: tc.args}
+			we := &wamp.Error{URI: tc.uri, Args: tc.args}
 			fs, _ := newStore(t, map[string]any{URIUsage: we})
 			_, err := fs.Usage(ctx)
 			wantError(t, err, tc.wantCode, tc.wantReason)
-			var got *crossbar.WampError
+			var got *wamp.Error
 			if !errors.As(err, &got) || got != we {
 				t.Errorf("the WAMP error is not reachable through the mapped error")
 			}
@@ -153,14 +159,58 @@ func TestWampErrorMapping(t *testing.T) {
 	}
 
 	t.Run("wrapped WAMP error", func(t *testing.T) {
-		we := &crossbar.WampError{URI: crossbar.ErrURINotAuthorized}
+		we := &wamp.Error{URI: wamp.URINotAuthorized}
 		fs, _ := newStore(t, map[string]any{URIPut: fmt.Errorf("call failed: %w", we)})
 		_, err := fs.Put(ctx, "a.jpg", []byte("x"), Namespace("frames"))
 		wantError(t, err, CodeNotAuthorized, "wamp.error.not_authorized")
 	})
 
+	// fleetfiles registers its procedures on a fresh session at every bind
+	// (boot, reconvergence, template change). A call that overtakes a
+	// registration reaches the callee before its nexus client has installed
+	// the handler, and the client refuses it with invalid_argument: the
+	// procedure is not served yet, exactly like no_such_procedure. The call
+	// ran nowhere, but a file call is not retried (as in the Python SDK).
+	t.Run("call that overtook a registration", func(t *testing.T) {
+		we := &wamp.Error{URI: "wamp.error.invalid_argument", Args: []any{"client has no handler for registration 4711"}}
+		fs, fc := newStore(t, map[string]any{URIUsage: we})
+		_, err := fs.Usage(ctx)
+		wantError(t, err, CodeNotAvailable,
+			`the file service did not take the call: it is still registering its procedures: "client has no handler for registration 4711"`)
+		if !wamp.IsNotServedYet(err) {
+			t.Error("the mapped error no longer tells IsNotServedYet")
+		}
+		var got *wamp.Error
+		if !errors.As(err, &got) || got != we {
+			t.Errorf("the WAMP error is not reachable through the mapped error")
+		}
+		if n := fc.count(URIUsage); n != 1 {
+			t.Errorf("usage called %d times, want 1 (no retry)", n)
+		}
+	})
+
+	t.Run("other invalid_argument refusals pass through", func(t *testing.T) {
+		for _, args := range [][]any{nil, {"bad input"}, {int64(1)}} {
+			we := &wamp.Error{URI: "wamp.error.invalid_argument", Args: args}
+			fs, _ := newStore(t, map[string]any{URIUsage: we})
+			if _, err := fs.Usage(ctx); err != we {
+				t.Errorf("args %v: err = %v (%T), want the WAMP error itself", args, err, err)
+			}
+		}
+	})
+
+	t.Run("a cancelled call passes through", func(t *testing.T) {
+		// The router cancelled a call in flight when its callee left: it may
+		// have run, so it is not "not available".
+		we := &wamp.Error{URI: wamp.URICanceled, Args: []any{"callee gone"}}
+		fs, _ := newStore(t, map[string]any{URIUsage: we})
+		if _, err := fs.Usage(ctx); err != we {
+			t.Fatalf("err = %v (%T), want the WAMP error itself", err, err)
+		}
+	})
+
 	t.Run("unmapped WAMP error passes through", func(t *testing.T) {
-		we := &crossbar.WampError{URI: crossbar.ErrURIRuntimeError, Args: []any{"boom"}}
+		we := &wamp.Error{URI: wamp.URIRuntimeError, Args: []any{"boom"}}
 		fs, _ := newStore(t, map[string]any{URIUsage: we})
 		_, err := fs.Usage(ctx)
 		if err != we {
@@ -181,7 +231,7 @@ func TestWampErrorMapping(t *testing.T) {
 	})
 
 	t.Run("file errors pass through unchanged", func(t *testing.T) {
-		orig := wrapError(CodeNotAvailable, "x", &crossbar.WampError{URI: crossbar.ErrURINoSuchProcedure})
+		orig := wrapError(CodeNotAvailable, "x", &wamp.Error{URI: wamp.URINoSuchProcedure})
 		fs, _ := newStore(t, map[string]any{URIUsage: orig})
 		if _, err := fs.Usage(ctx); err != orig {
 			t.Fatalf("err = %v, want the original *Error", err)
@@ -189,7 +239,7 @@ func TestWampErrorMapping(t *testing.T) {
 	})
 
 	t.Run("the catalog fetch is mapped too", func(t *testing.T) {
-		fs, _ := newStore(t, map[string]any{URINamespaces: &crossbar.WampError{URI: crossbar.ErrURINoSuchProcedure}})
+		fs, _ := newStore(t, map[string]any{URINamespaces: &wamp.Error{URI: wamp.URINoSuchProcedure}})
 		_, err := fs.Put(ctx, "a", []byte("x"))
 		wantError(t, err, CodeNotAvailable, "the file service is not available on this deployment")
 	})
@@ -234,6 +284,21 @@ func TestWireShapes(t *testing.T) {
 			URIList, []any{m{"namespace": "", "prefix": "", "limit": int64(200), "cursor": ""}}},
 		{"List zero limit is the default", func(fs *FileStore) error { _, err := fs.List(ctx, Limit(0)); return err },
 			URIList, []any{m{"namespace": "default", "prefix": "", "limit": int64(200), "cursor": ""}}},
+		// A delimiter only when asked for: without one the service lists
+		// folder-style ("/").
+		{"List flat", func(fs *FileStore) error { _, err := fs.List(ctx, Delimiter("")); return err },
+			URIList, []any{m{"namespace": "default", "prefix": "", "limit": int64(200), "cursor": "", "delimiter": ""}}},
+		{"List delimiter", func(fs *FileStore) error { _, err := fs.List(ctx, Prefix("a"), Delimiter("/")); return err },
+			URIList, []any{m{"namespace": "default", "prefix": "a", "limit": int64(200), "cursor": "", "delimiter": "/"}}},
+		// Iter asks for every object under the prefix: a flat listing,
+		// whatever Delimiter and Cursor say.
+		{"Iter", func(fs *FileStore) error { return iterate(fs.Iter(ctx)) },
+			URIList, []any{m{"namespace": "default", "prefix": "", "limit": int64(200), "cursor": "", "delimiter": ""}}},
+		{"Iter options", func(fs *FileStore) error {
+			return iterate(fs.Iter(ctx, Namespace("frames"), Prefix("a"), Limit(5), Delimiter("/"), Cursor("c")))
+		}, URIList, []any{m{"namespace": "frames", "prefix": "a", "limit": int64(5), "cursor": "", "delimiter": ""}}},
+		{"Iter folder prefix", func(fs *FileStore) error { return iterate(fs.Iter(ctx, Prefix("a/b/"))) },
+			URIList, []any{m{"namespace": "default", "prefix": "a/b", "limit": int64(200), "cursor": "", "delimiter": ""}}},
 		{"Stat", func(fs *FileStore) error { _, err := fs.Stat(ctx, "a.jpg", Namespace("frames")); return err },
 			URIStat, []any{m{"namespace": "frames", "key": "a.jpg"}}},
 		{"Exists", func(fs *FileStore) error { _, err := fs.Exists(ctx, "a.jpg"); return err },
@@ -304,6 +369,15 @@ func TestWireShapes(t *testing.T) {
 	}
 }
 
+// iterate runs an iteration to its end and returns its error.
+func iterate(seq func(func(*ObjectInfo, error) bool)) error {
+	var last error
+	for _, err := range seq {
+		last = err
+	}
+	return last
+}
+
 func TestNilCaller(t *testing.T) {
 	fs := New(nil, nil)
 	if _, err := fs.Stat(context.Background(), "a"); !errors.Is(err, errNoCaller) {
@@ -334,5 +408,49 @@ func TestErrorType(t *testing.T) {
 	}
 	if (&Error{Code: CodeInternal}).Error() != "INTERNAL" {
 		t.Error("an error without reason must read as its code")
+	}
+}
+
+// ErrorCodes hands out a copy: a caller cannot change the list for others.
+// It lists fleetfiles' stable code table (handlers.go, v0.2.0) in its order,
+// then the client-side codes.
+func TestErrorCodesIsACopy(t *testing.T) {
+	want := []string{
+		"NOT_AUTHORIZED", "NO_SUCH_NAMESPACE", "NO_SUCH_OBJECT", "TOO_LARGE",
+		"OBJECT_TOO_LARGE", "QUOTA_EXCEEDED", "CONTENT_TYPE_NOT_ALLOWED",
+		"INVALID_KEY", "INVALID_RANGE", "NOT_SUPPORTED", "INTERNAL",
+		"NOT_AVAILABLE", "PRESIGN_UNREACHABLE", "CLOCK_SKEW",
+	}
+	codes := ErrorCodes()
+	if !reflect.DeepEqual(codes, want) {
+		t.Fatalf("ErrorCodes() = %q, want %q", codes, want)
+	}
+	codes[0] = "CHANGED"
+	if got := ErrorCodes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the list changed through a returned slice: %q", got)
+	}
+}
+
+// The key grammar is the file service's to enforce: a refused key comes back
+// with the service's code, which the SDK neither invents nor rewrites — a
+// service that classifies key errors says INVALID_KEY (fleetfiles v0.2.0
+// still says INTERNAL), and Exists reports it rather than "missing".
+func TestKeyRefusalsCarryTheServiceCode(t *testing.T) {
+	ctx := context.Background()
+	for _, code := range []string{CodeInvalidKey, CodeInternal} {
+		t.Run(code, func(t *testing.T) {
+			fs, fc := newStore(t, map[string]any{URIStat: fail(code, "object key must not end with '/'")})
+			found, err := fs.Exists(ctx, "dir/")
+			if found {
+				t.Error("Exists reported a refused key as present")
+			}
+			wantError(t, err, code, "object key must not end with '/'")
+			if !errors.Is(err, &Error{Code: code}) {
+				t.Errorf("errors.Is does not match %s", code)
+			}
+			if want := []any{map[string]any{"namespace": "default", "key": "dir/"}}; !reflect.DeepEqual(fc.callsTo(URIStat)[0].Args, want) {
+				t.Errorf("stat args = %v, want the key as given (no client-side key check)", fc.callsTo(URIStat)[0].Args)
+			}
+		})
 	}
 }

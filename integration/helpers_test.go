@@ -1,10 +1,10 @@
 //go:build integration
 
-// Package integration holds end-to-end tests against a real Crossbar router
-// and a fake IronFlock platform (see README.md in this directory). They are
+// Package integration holds end-to-end tests against ironflock-router and a
+// fake IronFlock platform (see README.md in this directory). They are
 // excluded from normal builds; run them with
 //
-//	IRONFLOCK_TEST_PLATFORM_URL=ws://localhost:18081/ws-ua-usr go test -tags integration ./integration/...
+//	IRONFLOCK_TEST_PLATFORM_URL=ws://localhost:18082/ws-ua-usr go test -tags integration ./integration/...
 package integration
 
 import (
@@ -13,7 +13,9 @@ import (
 	"testing"
 )
 
-// Device identity the fake platform's router accepts (see crossbar/config.json).
+// Device identity the fake platform admits: the device (key 42) of app 26
+// in swarm 2, whose legacy credential is (serial, serial) (see
+// fake_platform.py).
 const (
 	testSerial   = "06a0bf96-a539-4d6a-8471-ac7adc67616e"
 	testSwarmKey = "2"

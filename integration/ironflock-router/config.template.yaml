@@ -7,19 +7,27 @@
 # ones. gen_config.py --check proves it (parses both files, compares).
 # Edit this template, never config.yaml.
 #
-# Topology (mirrors production's listener split, docs/LISTENERS.md):
-#   :18082 /ws-ua-usr  app containers (SDKs).  Profile picked by
-#                      USERAPP_PROFILE: userapp_static (default, static CRA
-#                      users) or userapp_cra (dynamic CRA against a stub
-#                      auth.userapp.authenticate that fake_platform.py
-#                      registers, the production shape).
-#   :18084 /ws-svc     platform services: the fake platform (fake-backend),
-#                      its stub ironflock-auth session (svc_auth), and the
+# Topology (mirrors production's listener split, docs/LISTENERS.md); the
+# router fills in the ${VAR:-default} values from its environment, which
+# start.sh sets:
+#   ROUTER_PUBLIC_PORT (18082) /ws-ua-usr
+#                      app containers (SDKs). Profile picked by
+#                      USERAPP_PROFILE, which start.sh derives from AUTH_MODE:
+#                      userapp_cra (AUTH_MODE=dynamic, the default: dynamic
+#                      CRA against auth.userapp.authenticate, which
+#                      fake_platform.py answers like ironflock-auth v0.4.0,
+#                      the production shape) or userapp_static
+#                      (AUTH_MODE=static: static CRA users).
+#   ROUTER_INTERNAL_PORT (18084) /ws-svc
+#                      platform services: the fake platform (fake-backend),
+#                      its ironflock-auth session (svc_auth), and the
 #                      router's own in-process `system` sessions.
-#   :18083             ops (/healthz, /readyz, /stats).
+#   ROUTER_OPS_PORT (18083)
+#                      ops (/healthz, /readyz, /stats).
 #
 # Local deviations from production are marked "DEVIATION:" below.
-# Start/stop: start.sh [AUTH_MODE=static|dynamic], stop.sh (this directory).
+# start.sh starts the router (binary or image) and the fake platform,
+# restart.sh restarts only the router, stop.sh stops both (this directory).
 
 log_level: ${IRONFLOCK_LOG_LEVEL:-info}
 
@@ -68,7 +76,7 @@ realms:
   # router reaches auth.authorize / auth.userapp.authenticate through its
   # own in-process sessions, which no binding gates.
   - uri: ironflock.auth
-    description: "Authenticators and authorization policy (stubbed by fake_platform.py)"
+    description: "Authenticators and authorization policy (fake_platform.py: fake_auth)"
     allow_disclose: true
     roles:
       - svc_auth
@@ -105,7 +113,7 @@ roles:
 #@RULES svc_fleetfiles
       - { uri: "test.", match: prefix, allow_register: true }
 
-  # ironflock-auth (stubbed by fake_platform.py's auth session), verbatim.
+  # ironflock-auth (fake_platform.py's auth session), verbatim.
 #@ROLE svc_auth
 
   # The router's in-process sessions (authorizer callout + dynamic
@@ -119,9 +127,11 @@ roles:
 
 # Same callout as production: app's digit-led rules (function URIs, raw table
 # write topics) name `identity`, answered by auth.authorize on ironflock.auth.
-# fake_platform.py registers a stub implementing ironflock-auth's rule for
-# data-realm action URIs (see its authorize()). IDENTITY_AUTHORIZER_MODE=shadow
-# turns it advisory for debugging.
+# fake_platform.py answers it with a port of ironflock-auth v0.4.0's
+# Policy.Decide (fake_auth.authorize; on a data realm: REGISTER only for the
+# session's own device, app and stage, in any case, patterns allowed when they
+# fix those segments; every other action within the realm's swarm).
+# IDENTITY_AUTHORIZER_MODE=shadow turns it advisory for debugging.
 authorizers:
   identity:
     procedure: auth.authorize
@@ -139,7 +149,8 @@ auth:
   ready_grace_sec: 60
 
   profiles:
-    # DEFAULT /ws-ua-usr profile: static WAMP-CRA users.
+    # AUTH_MODE=static (and the fallback when USERAPP_PROFILE is unset):
+    # static WAMP-CRA users.
     # A static user has ONE role on every realm (nexus KeyStore is keyed by
     # authid only), so production's per-realm answer ("app on its own
     # realm, app_reader on a granted provider realm, refused elsewhere")
@@ -147,25 +158,33 @@ auth:
     # separate authid stands in for the consumer. The SDKs present ONE
     # credential to both realms, so with this profile connect_to_app() lands
     # on realm-2-77-dev as `app`, a role not bound there: every request is
-    # refused (role_unknown). Use USERAPP_PROFILE=userapp_cra for the
-    # production per-realm behaviour.
+    # refused (role_unknown). A static user's session also keeps the authid
+    # it presented (production rewrites every app session to the device
+    # serial), so the identity callout reads the serial out of a per-app
+    # authid in this mode. Use USERAPP_PROFILE=userapp_cra for the production
+    # behaviour.
     userapp_static:
       wampcra:
         type: static
         users:
           # legacy device-wide credential (serial, serial)
           - { authid: "06a0bf96-a539-4d6a-8471-ac7adc67616e", role: app, secret: "06a0bf96-a539-4d6a-8471-ac7adc67616e" }
-          # per-app credential (APP_AUTH_ID / APP_AUTH_SECRET)
-          - { authid: "app-26-per-app", role: app, secret: "per-app-secret" }
+          # per-app credential, as perapp_env/ holds it (fake_auth.app_credential:
+          # the device agent's HMAC derivation for app 26, DEV, epoch 1)
+          - { authid: "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e", role: app, secret: "4/GZA5IXF9RJuW3PBI2QTSXk70x3idoV8hiWOX+VECU=" }
           # stand-in for the per-app credential's app_reader admission on the
           # provider realm (production: same authid as above)
           - { authid: "app-26-reader", role: app_reader, secret: "per-app-reader-secret" }
       allowed_roles: [app, app_reader]
 
-    # PRODUCTION shape: dynamic WAMP-CRA, the authenticator answers per HELLO
-    # realm. auth.userapp.authenticate is registered by fake_platform.py when
-    # FAKE_PLATFORM_USERAPP_AUTH=1 (start.sh AUTH_MODE=dynamic) with the same
-    # three credentials and the production rule (see authenticate_userapp()).
+    # PRODUCTION shape (AUTH_MODE=dynamic, the default): dynamic WAMP-CRA,
+    # the authenticator answers per HELLO realm. auth.userapp.authenticate is
+    # registered by fake_platform.py when FAKE_PLATFORM_USERAPP_AUTH=1: a port
+    # of ironflock-auth v0.4.0 over REaccounting's f_authenticate_userapp
+    # (fake_auth.py): the per-app credential gets `app` on its app's realm and
+    # `app_reader` on a granted provider realm, the legacy credential `app` on
+    # the realm of an app installed on the device, and every session's authid
+    # becomes the device serial.
     userapp_cra:
       wampcra:
         type: dynamic

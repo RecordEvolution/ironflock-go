@@ -1,0 +1,16 @@
+# golangci-lint v2 configuration, used by `just check` and CI.
+version: "2"
+
+run:
+  # Lint the end-to-end suites in integration/ too: they build only with this
+  # tag, so without it they would never be linted or vetted.
+  build-tags:
+    - integration
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck and unused.
+  default: standard
+
+formatters:
+  enable:
+    - gofmt

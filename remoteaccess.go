@@ -17,9 +17,8 @@ const maxDNSLabelLength = 63
 
 // GetRemoteAccessURLForPort returns the public URL of a port declared in
 // the app's port-template.yml, once its tunnel is active. protocol is
-// "http" (default when empty), "https", "tcp" or "udp"; tcp/udp ports need
-// the template's remote_port_environment name. Port values are read live
-// from /data/env, so call it again rather than caching the result. It
+// "http" (default when empty), "https", "tcp" or "udp". Port values are read
+// live from /data/env, so call it again rather than caching the result. It
 // returns false when the URL cannot be composed.
 //
 // http and https ports are served under the tunnel label
@@ -31,14 +30,37 @@ const maxDNSLabelLength = 63
 // The label must be a single valid DNS label: at most 63 characters, no dot
 // (an app name containing a dot cannot be tunneled).
 //
-// tcp and udp ports use the tunnel-assigned public port the platform injects
-// under remotePortEnvironment: <protocol>://<TUNNEL_DOMAIN>:<port>. On an
-// instance device the internet-facing port arrives as
-// <remotePortEnvironment>_CLOUD and is preferred
-// (<protocol>://<CLOUD_TUNNEL_DOMAIN>:<port>); until it appears, the
-// instance-local URL is returned.
+// tcp and udp ports use the public port the tunnel assigned, which the
+// device agent announces as REMOTE_PORT_FOR_<port> (agent 0.19.8 and later):
+// <protocol>://<TUNNEL_DOMAIN>:<remote port>. remotePortEnvironment, when not
+// empty, names the variable to read instead: the template's own
+// remote_port_environment, which agents before 0.19.8 need. On an instance
+// device the internet-facing port arrives as the variable's _CLOUD companion
+// (REMOTE_PORT_FOR_<port>_CLOUD) and is preferred
+// (<protocol>://<CLOUD_TUNNEL_DOMAIN>:<port>); until it appears, and again
+// once the agent has removed it from /data/env (cloud forwarding turned off),
+// the instance-local URL is returned. A port of 0 has not been assigned yet.
 //
-// Unset or empty tunnel domains default to app.ironflock.com.
+// Unset or empty tunnel domains default to app.ironflock.com. The platform
+// does not set CLOUD_TUNNEL_DOMAIN today: the instance route and the cloud
+// port are always composed on app.ironflock.com unless the app sets
+// CLOUD_TUNNEL_DOMAIN itself (in its environment settings), say for an
+// appliance whose cloud tunnel host is another one. On an edge device of an
+// appliance installed without a domain (plain mode) the agent injects
+// TUNNEL_DOMAIN=localhost, so the URLs composed on it — every non-instance
+// URL, and an instance device's tcp/udp URL until its _CLOUD port arrives —
+// point at localhost: such an appliance serves app ports on its host ports,
+// which a tunnel URL cannot express.
+//
+// The agent tunnels the ports of PROD installs only. In a DEV container the
+// http(s) URL is the one of the PROD install of the same app on this device
+// (the label has no stage), which never reaches this container; reach a DEV
+// app on the device's LAN address instead. tcp/udp return false there, as
+// the agent announces no remote port to a DEV container.
+//
+// The values come from /data/env, which the agent makes readable by root
+// only: in a container running as another user they are the values the
+// container started with, and the SDK logs a warning once.
 func (f *IronFlock) GetRemoteAccessURLForPort(port int, protocol, remotePortEnvironment string) (string, bool) {
 	protocol = strings.ToLower(strings.TrimSpace(protocol))
 	if protocol == "" {
@@ -48,19 +70,26 @@ func (f *IronFlock) GetRemoteAccessURLForPort(port int, protocol, remotePortEnvi
 
 	switch protocol {
 	case "tcp", "udp":
-		if remotePortEnvironment == "" {
-			return "", false
+		name := remotePortEnvironment
+		if name == "" {
+			name = fmt.Sprintf("REMOTE_PORT_FOR_%d", port)
 		}
 		if instanceKey != "" {
-			if cloudPort := env.ReadInjected(remotePortEnvironment + "_CLOUD"); cloudPort != "" {
-				return fmt.Sprintf("%s://%s:%s", protocol, tunnelDomain("CLOUD_TUNNEL_DOMAIN"), cloudPort), true
+			// The agent deletes the _CLOUD file when the cloud port goes
+			// away; the variable of the same name is stale by then.
+			cloudPort, err := env.LookupLive(name + "_CLOUD")
+			env.WarnUnreadable(f.log, err)
+			if p, ok := assignedPort(cloudPort); ok {
+				return fmt.Sprintf("%s://%s:%s", protocol, tunnelDomain("CLOUD_TUNNEL_DOMAIN"), p), true
 			}
 		}
-		remotePort := env.ReadInjected(remotePortEnvironment)
-		if remotePort == "" {
+		remotePort, err := env.Lookup(name)
+		env.WarnUnreadable(f.log, err)
+		p, ok := assignedPort(remotePort)
+		if !ok {
 			return "", false
 		}
-		return fmt.Sprintf("%s://%s:%s", protocol, tunnelDomain("TUNNEL_DOMAIN"), remotePort), true
+		return fmt.Sprintf("%s://%s:%s", protocol, tunnelDomain("TUNNEL_DOMAIN"), p), true
 	case "http", "https":
 	default:
 		return "", false
@@ -84,6 +113,17 @@ func (f *IronFlock) GetRemoteAccessURLForPort(port int, protocol, remotePortEnvi
 		return "", false
 	}
 	return fmt.Sprintf("https://%s.%s", label, domain), true
+}
+
+// assignedPort returns the remote port an announced value names: none when
+// it is empty or 0, which the agent announces for a rule whose tunnel has no
+// port reserved yet.
+func assignedPort(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return "", false
+	}
+	return value, true
 }
 
 // tunnelDomain returns the tunnel domain the environment variable name holds,

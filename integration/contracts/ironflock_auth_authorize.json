@@ -1,0 +1,1252 @@
+{
+ "cases": [
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.a.b",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.27.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "3.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "wildcard"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2..26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "3.26.sensordata",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "3.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.dev.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.dev."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "wildcard"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV..x",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.99.PROD.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.99.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.a.b",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.99.PROD.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.D",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "wildcard"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42..DEV.x",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "wildcard"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26..x",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "regex"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "subscribe",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DeV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DeV."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "02.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.042.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.026.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "prefix"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "com.example.x",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "re.mgmt.SER.x",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "٢.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "swarm_device",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "swarm_device",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "device",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.DEV."
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "device",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app_reader",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app_reader",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "board_writer",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "board_writer",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "publish",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.26.sensordata",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-prod",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-prod",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.PROD."
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-prod",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-3-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-3-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-3-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm1",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm1",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm1",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-DEV",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-DEV",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-DEV",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev-x",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev-x",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev-x",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-prod",
+    "session": 1
+   },
+   "uri": "2.42.26.PROD.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2.42.26.PROD."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "unknown-serial",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "unknown-serial",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "app-26-dev-e1@06a0bf96-a539-4d6a-8471-ac7adc67616e",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  },
+  {
+   "action": "register",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.42.26.DEV.fn",
+   "verdict": {
+    "allow": false
+   }
+  },
+  {
+   "action": "call",
+   "options": {
+    "match": "exact"
+   },
+   "session": {
+    "authid": "",
+    "authrole": "app",
+    "realm": "realm-2-26-dev",
+    "session": 1
+   },
+   "uri": "2.43.26.DEV.fn",
+   "verdict": {
+    "allow": true,
+    "cache_prefix": "2."
+   }
+  }
+ ],
+ "source": "ironflock-auth v0.4.0 internal/authz/policy.go Policy.Decide, store: device 42 of swarm 2 with the harness serial"
+}

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // Cross-app procedures on the app's own realm.
@@ -59,13 +59,22 @@ func (i *ConsumedAppInfo) Catalog(stage string) *StageCatalog {
 
 // ConnectToAppOptions configures ConnectToApp.
 type ConnectToAppOptions struct {
-	// Stage is the provider stage, "dev" or "prod" (default: this app's own
-	// stage).
+	// Stage is the provider stage, "dev" or "prod" in any case (default:
+	// this app's own stage, IronFlock.Stage().Lower()).
 	Stage string
 	// OnError is called (on its own goroutine) when the connection is
-	// fatally denied AFTER ConnectToApp returned — e.g. the grant was
-	// revoked and the next reconnect was refused. Before that, the same
-	// condition is returned by ConnectToApp.
+	// denied for good AFTER ConnectToApp returned — e.g. the grant was
+	// revoked, and the reconnects are refused. A refusal counts as for good
+	// only once it persists: 3 refusals or more since the connection was
+	// last up — the router closing the session for an auth reason counts as
+	// one, as does each refused reconnect — the first one at least 60s ago
+	// (see wamp.Config.FailOnAuthError), because the platform refuses the
+	// same way while it cannot verify access for a moment;
+	// until then the connection keeps reconnecting, and the handle recovers
+	// if a reconnect succeeds. The handle is then evicted (the next
+	// ConnectToApp opens a fresh connection) and its connection released.
+	// Before ConnectToApp returned, a denial is returned by ConnectToApp at
+	// once.
 	//
 	// OnError is bound to the cached handle when it is created: a call that
 	// returns an existing handle, or shares an open already in flight, does
@@ -76,12 +85,13 @@ type ConnectToAppOptions struct {
 
 // ConnectToAllAppsOptions configures ConnectToAllApps.
 type ConnectToAllAppsOptions struct {
-	// Stage is the provider stage, "dev" or "prod" (default: this app's own
-	// stage).
+	// Stage is the provider stage, "dev" or "prod" in any case (default:
+	// this app's own stage, IronFlock.Stage().Lower()).
 	Stage string
 	// OnError is called with the failure of each provider that could not be
 	// opened (unless StopOnError is set), and with a *CrossAppAccessError
-	// when an opened provider connection is later fatally denied.
+	// when an opened provider connection is later denied for good (when a
+	// denial counts as for good: see ConnectToAppOptions.OnError).
 	//
 	// Open failures are reported on the calling goroutine, in the order of
 	// the provider list, before ConnectToAllApps returns. Like
@@ -121,12 +131,14 @@ func (e *consumedEntry) wait(ctx context.Context) (*ConsumedApp, error) {
 
 // ConsumedApp is a read-only handle on another app's data backend, in the
 // same project and fleet. It wraps a dedicated connection to the provider's
-// realm, where the router allows only reading shared tables and transforms.
+// realm, where the router allows the per-app credential only reading shared
+// tables and transforms (see ConnectToApp for the legacy credential).
 type ConsumedApp struct {
 	// App is the provider app's name.
 	App string
-	// Stage is the provider stage this handle is connected to ("dev" or
-	// "prod").
+	// Stage is the provider stage this handle is connected to, in lower
+	// case: "dev" or "prod". (IronFlock.Stage returns a Stage, "DEV" or
+	// "PROD"; Stage.Lower converts it.)
 	Stage string
 	// Tables and Transforms are what the provider shares on Stage.
 	Tables     []TableInfo
@@ -141,8 +153,8 @@ type ConsumedApp struct {
 }
 
 // Connection returns the underlying connection to the provider's realm.
-func (a *ConsumedApp) Connection() *crossbar.Connection {
-	c, _ := a.conn.(*crossbar.Connection)
+func (a *ConsumedApp) Connection() *wamp.Connection {
+	c, _ := a.conn.(*wamp.Connection)
 	return c
 }
 
@@ -272,11 +284,15 @@ func callFailed(op string, err error) error {
 }
 
 // GetHistory reads rows of a shared table or transform (the provider's
-// history.transformed.<table>). A nil q reads the 10 most recent rows.
+// history.transformed.<table>) as IronFlock.GetHistory does — a large result
+// reassembled from chunks, a transform with the semantics TableQueryParams
+// describes (Limit at most 3000; TimeRange, Columns, ColumnPaths and the
+// Latest marker ignored). A nil q reads the 10 newest rows of a table.
 //
 // Errors: *CrossAppAccessError with PRIVATE_TABLE for a name outside the
 // shared catalog, SECRET_COLUMN when q filters on or selects a column the
-// provider marks secret, NOT_AUTHORIZED when the provider denies access.
+// provider marks secret, NOT_AUTHORIZED when the provider denies access; the
+// data backend's refusals as for IronFlock.GetHistory.
 func (a *ConsumedApp) GetHistory(ctx context.Context, table string, q *TableQueryParams) ([]Row, error) {
 	if err := a.assertInCatalog(table); err != nil {
 		return nil, err
@@ -292,15 +308,17 @@ func (a *ConsumedApp) GetHistory(ctx context.Context, table string, q *TableQuer
 		return nil, err
 	}
 	op := fmt.Sprintf("getHistory('%s') on app '%s' (%s)", table, a.App, a.Stage)
-	res, err := a.conn.Call(ctx, "history.transformed."+table, []any{wire}, nil, nil, a.reconnectWindow)
+	read := new(chunkedRead)
+	res, err := a.conn.Call(ctx, "history.transformed."+table, []any{wire}, nil, read.options(), a.reconnectWindow)
 	if err != nil {
 		return nil, callFailed(op, err)
 	}
-	return decodeRows(op, res)
+	return read.rows(op, res)
 }
 
 // GetSeriesHistory reads down-sampled series of a shared table (tables
-// only: there is no series procedure for transforms).
+// only: there is no series procedure for transforms), with the query and
+// the rows of IronFlock.GetSeriesHistory.
 func (a *ConsumedApp) GetSeriesHistory(ctx context.Context, table string, q SeriesQueryParams) ([]Row, error) {
 	if strings.TrimSpace(table) == "" {
 		return nil, invalidf("Tablename must not be empty!")
@@ -326,15 +344,17 @@ func (a *ConsumedApp) GetSeriesHistory(ctx context.Context, table string, q Seri
 		return nil, invalidParams("series query", err)
 	}
 	op := fmt.Sprintf("getSeriesHistory('%s') on app '%s' (%s)", table, a.App, a.Stage)
-	res, err := a.conn.Call(ctx, "history.transformed.series."+table, []any{wire}, nil, nil, a.reconnectWindow)
+	read := new(chunkedRead)
+	res, err := a.conn.Call(ctx, "history.transformed.series."+table, []any{wire}, nil, read.options(), a.reconnectWindow)
 	if err != nil {
 		return nil, callFailed(op, err)
 	}
-	return decodeRows(op, res)
+	return read.rows(op, res)
 }
 
 // SubscribeToTable subscribes handler to realtime rows of a shared table or
-// transform, exactly like IronFlock.SubscribeToTable.
+// transform, exactly like IronFlock.SubscribeToTable — a transform's events
+// carry the whole view (see Event.Rows).
 func (a *ConsumedApp) SubscribeToTable(ctx context.Context, table string, handler EventHandler, opts ...SubscribeOptions) (*TableSubscription, error) {
 	if err := a.assertInCatalog(table); err != nil {
 		return nil, err
@@ -345,8 +365,9 @@ func (a *ConsumedApp) SubscribeToTable(ctx context.Context, table string, handle
 // Close closes the connection to the provider. IronFlock.Stop closes all
 // consumed apps as well.
 //
-// Close also drops the handle from the cache, so a later ConnectToApp
-// opens a fresh connection. It is safe to call more than once.
+// Close first drops the handle from the cache, so a ConnectToApp from then
+// on opens a fresh connection (one that ran before Close may still have
+// returned this handle). It is safe to call more than once.
 func (a *ConsumedApp) Close(ctx context.Context) error {
 	if err := a.close(ctx); err != nil {
 		return &OperationError{Op: fmt.Sprintf("Close of the connection to app '%s' (%s)", a.App, a.Stage), Err: err}
@@ -354,15 +375,16 @@ func (a *ConsumedApp) Close(ctx context.Context) error {
 	return nil
 }
 
-// close stops the connection and drops the handle from the cache.
+// close drops the handle from the cache and then stops the connection: a
+// ConnectToApp that comes in while the connection is still saying goodbye
+// opens a fresh one instead of getting this one.
 func (a *ConsumedApp) close(ctx context.Context) error {
-	err := a.conn.Stop(ctx)
 	a.closeOnce.Do(func() {
 		if a.onClosed != nil {
 			a.onClosed()
 		}
 	})
-	return err
+	return a.conn.Stop(ctx)
 }
 
 // consumedStage resolves a cross-app stage option: empty selects the app's
@@ -379,10 +401,18 @@ func (f *IronFlock) consumedStage(stage string) (string, error) {
 }
 
 // ConnectToApp opens a read-only connection to another app's data backend in
-// the same project and returns a handle on it. The provider must list this
-// app in its data-template consumes: section and the project user must have
-// granted access. Handles are cached per app and stage: a second call
-// returns the same handle, and concurrent calls share one attempt.
+// the same project and returns a handle on it. This app must declare the
+// provider in its own data-template consumes: section (or hold the wildcard
+// consumes: [{app: "*"}]), and the project user must have granted access.
+// Handles are cached per app and stage: a second call returns the same
+// handle, and concurrent calls share one attempt.
+//
+// The connection needs the per-app credential the device agent injects
+// (APP_AUTH_ID and APP_AUTH_SECRET), or one passed with WithCredentials. With
+// the legacy device credential (the serial-number fallback, e.g. under an
+// older agent) the platform refuses the provider's realm (NOT_AUTHORIZED,
+// whose message then says so) — or, when the provider app runs on this same
+// device, admits it with that app's own full rights rather than read-only.
 //
 // Errors: *CrossAppAccessError with NO_GRANT, PROVIDER_NOT_INSTALLED,
 // UNKNOWN_APP or NOT_AUTHORIZED.
@@ -390,7 +420,7 @@ func (f *IronFlock) consumedStage(stage string) (string, error) {
 // The attempt runs independently of ctx, which bounds only this caller's
 // wait: a caller that gives up does not fail the attempt for others sharing
 // it, and a completed attempt is cached for the next call. Stop aborts
-// attempts in flight.
+// attempts in flight; they fail with an error wrapping wamp.ErrStopped.
 func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...ConnectToAppOptions) (*ConsumedApp, error) {
 	if strings.TrimSpace(appName) == "" {
 		return nil, invalidf("appName must not be empty!")
@@ -406,10 +436,7 @@ func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...Co
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Lower-cased so the key matches those of ConnectToAllApps: the platform
-	// returns app names in lower case.
-	key := strings.ToLower(appName) + ":" + stage
-	entry, err := f.cachedOpen(key, func(ctx context.Context, evict func()) (*ConsumedApp, error) {
+	entry, err := f.cachedOpen(appName, stage, func(ctx context.Context, evict func()) (*ConsumedApp, error) {
 		return f.openConsumedApp(ctx, appName, stage, evict, o.OnError)
 	})
 	if err != nil {
@@ -424,7 +451,7 @@ func (f *IronFlock) ConnectToApp(ctx context.Context, appName string, opts ...Co
 func (f *IronFlock) ListConsumableApps(ctx context.Context) ([]ConsumedAppInfo, error) {
 	// The platform derives the consumer from the realm the call arrives on
 	// and ignores the arguments.
-	res, err := f.conn.Call(ctx, uriAppAccessList, []any{}, nil, nil, 0)
+	res, err := f.call(ctx, uriAppAccessList, []any{}, nil, nil, 0)
 	if err != nil {
 		return nil, callFailed(fmt.Sprintf("Call of procedure '%s'", uriAppAccessList), err)
 	}
@@ -503,7 +530,7 @@ func (f *IronFlock) ConnectToAllApps(ctx context.Context, opts ...ConnectToAllAp
 			f.log.Warn(fmt.Sprintf("Skipping a provider without an app name (provider_app_key %d)", info.ProviderAppKey))
 			continue
 		}
-		entry, err := f.cachedOpen(strings.ToLower(info.App)+":"+stage,
+		entry, err := f.cachedOpen(info.App, stage,
 			func(ctx context.Context, evict func()) (*ConsumedApp, error) {
 				return f.openFromInfo(ctx, info, stage, evict, onDenied)
 			})
@@ -540,50 +567,75 @@ func (f *IronFlock) ConnectToAllApps(ctx context.Context, opts ...ConnectToAllAp
 	return opened, nil
 }
 
-// cachedOpen returns the cache entry of key, starting open in the background
-// when there is none. open runs on a context Stop cancels and receives the
-// function that evicts this entry (and only this entry) from the cache.
-func (f *IronFlock) cachedOpen(key string, open func(ctx context.Context, evict func()) (*ConsumedApp, error)) (*consumedEntry, error) {
+// cachedOpen returns the cache entry of app on stage, starting open in the
+// background when there is none. open runs on a context Stop cancels and
+// receives the function that evicts this entry (and only this entry) from
+// the cache.
+func (f *IronFlock) cachedOpen(app, stage string, open func(ctx context.Context, evict func()) (*ConsumedApp, error)) (*consumedEntry, error) {
+	// Lower-cased so that ConnectToApp and ConnectToAllApps share entries:
+	// the platform returns app names in lower case.
+	key := strings.ToLower(app) + ":" + stage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopped {
-		return nil, fmt.Errorf("ironflock: cannot connect to another app after Stop: %w", crossbar.ErrStopped)
+		return nil, fmt.Errorf("ironflock: cannot connect to another app after Stop: %w", wamp.ErrStopped)
 	}
 	if e, ok := f.consumed[key]; ok {
 		return e, nil
 	}
 	e := &consumedEntry{done: make(chan struct{})}
 	f.consumed[key] = e
-	go f.runOpen(e, func() { f.evict(key, e) }, open)
+	go f.runOpen(e, app, stage, func() { f.evict(key, e) }, open)
 	return e, nil
 }
 
-// runOpen runs one consumed-app attempt and publishes its outcome on e. A
-// failed attempt is evicted before its waiters wake, so one that retries at
-// once starts a fresh attempt.
-func (f *IronFlock) runOpen(e *consumedEntry, evict func(), open func(ctx context.Context, evict func()) (*ConsumedApp, error)) {
-	app, err := open(f.openCtx, evict)
+// runOpen runs one attempt to open app on stage and publishes its outcome
+// on e. A failed attempt is evicted before its waiters wake, so one that
+// retries at once starts a fresh attempt.
+func (f *IronFlock) runOpen(e *consumedEntry, app, stage string, evict func(), open func(ctx context.Context, evict func()) (*ConsumedApp, error)) {
+	a, err := open(f.lifetime, evict)
 	if err == nil {
+		// Decide under the lock Stop takes its snapshot of the cache under:
+		// either the snapshot finds the outcome published, and Stop closes
+		// the connection, or this attempt finds Stop and closes it itself.
 		f.mu.Lock()
-		stopped := f.stopped
-		f.mu.Unlock()
-		if stopped {
-			// Stop ran while the attempt was in flight: do not hand out a
-			// connection nobody would close.
-			ctx, cancel := context.WithTimeout(context.Background(), f.cleanupTimeout)
-			if cerr := app.close(ctx); cerr != nil {
-				f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", app.App, cerr))
+		if !f.stopped {
+			if h := f.beforeOpenPublished; h != nil {
+				h()
 			}
-			cancel()
-			err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", app.App, app.Stage, crossbar.ErrStopped)
-			app = nil
+			e.app = a
+			close(e.done) // waiters do not take f.mu
+			if h := f.afterOpenPublished; h != nil {
+				h()
+			}
+			f.mu.Unlock()
+			return
 		}
+		f.mu.Unlock()
+		// Do not hand out a connection nobody would close.
+		ctx, cancel := context.WithTimeout(context.Background(), f.cleanupTimeout)
+		if cerr := a.close(ctx); cerr != nil {
+			f.log.Warn(fmt.Sprintf("Failed to close consumed app '%s': %v", a.App, cerr))
+		}
+		cancel()
+		err = fmt.Errorf("ironflock: connection to app '%s' (%s) closed by Stop: %w", a.App, a.Stage, wamp.ErrStopped)
+	} else if abortedByStop(f.lifetime, err) {
+		// Reported as what it is: the caller's context was not cancelled.
+		err = fmt.Errorf("ironflock: connection to app '%s' (%s) aborted by Stop: %w", app, stage, wamp.ErrStopped)
 	}
-	if err != nil {
-		evict()
-	}
-	e.app, e.err = app, err
+	evict()
+	e.err = err
 	close(e.done)
+}
+
+// abortedByStop reports whether err is the failure of an open that Stop
+// aborted: a cancellation (lifetime is the open's context) or a stopped
+// connection once Stop has begun. A cross-app access denial keeps its code,
+// even when it races Stop.
+func abortedByStop(lifetime context.Context, err error) bool {
+	var cerr *CrossAppAccessError
+	return lifetime.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, wamp.ErrStopped)) &&
+		!errors.As(err, &cerr)
 }
 
 // evict removes e from the cache, if key still maps to it.
@@ -598,7 +650,7 @@ func (f *IronFlock) evict(key string, e *consumedEntry) {
 // openConsumedApp resolves a provider on the app's own realm and opens the
 // connection to its realm.
 func (f *IronFlock) openConsumedApp(ctx context.Context, appName, stage string, evict func(), onDenied func(*CrossAppAccessError)) (*ConsumedApp, error) {
-	res, err := f.conn.Call(ctx, uriAppAccessResolve, []any{map[string]any{"app": appName}}, nil, nil, 0)
+	res, err := f.call(ctx, uriAppAccessResolve, []any{map[string]any{"app": appName}}, nil, nil, 0)
 	if err != nil {
 		return nil, callFailed(fmt.Sprintf("Call of procedure '%s'", uriAppAccessResolve), err)
 	}
@@ -623,11 +675,12 @@ func (f *IronFlock) openConsumedApp(ctx context.Context, appName, stage string, 
 // info: realm-<SWARM_KEY>-<provider_app_key>-<stage>, with this app's own
 // credential (the platform checks the grant against the connecting app).
 //
-// The connection fails on an authentication or authorization denial instead
-// of retrying. A denial while opening is returned as NOT_AUTHORIZED; a
-// denial after the open (grant revoked, reconnect refused) evicts the handle,
-// releases its connection and is reported to onDenied. The connection is
-// always torn down when the open fails.
+// The connection treats an authentication or authorization denial as final
+// (wamp.Config.FailOnAuthError). A denial while opening fails the open at once
+// and is returned as NOT_AUTHORIZED. After the open a denial counts only once
+// it persists (the router also refuses while it cannot verify access); then
+// the handle is evicted, its connection released, and the denial reported to
+// onDenied. The connection is always torn down when the open fails.
 func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, stage string, evict func(), onDenied func(*CrossAppAccessError)) (*ConsumedApp, error) {
 	catalog := info.Catalog(stage)
 	if catalog == nil {
@@ -650,18 +703,21 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 			return nil, err
 		}
 	}
-	appStage := crossbar.StageDevelopment
+	appStage := wamp.StageDevelopment
 	if stage == "prod" {
-		appStage = crossbar.StageProduction
+		appStage = wamp.StageProduction
 	}
-	realm := crossbar.RealmName(f.swarmKey, info.ProviderAppKey, appStage)
+	realm := wamp.RealmName(f.swarmKey, info.ProviderAppKey, appStage)
 	op := fmt.Sprintf("Connection to app '%s' (%s)", info.App, stage)
 	denial := func(reason string, cause error) *CrossAppAccessError {
+		why := "The grant may have been revoked."
+		if f.usesLegacyCredential() {
+			why = legacyCredentialDenial
+		}
 		return &CrossAppAccessError{
-			Code: CodeNotAuthorized,
-			Message: fmt.Sprintf("Access to app '%s' (%s) denied: %s. The grant may have been revoked.",
-				info.App, stage, reason),
-			Err: cause,
+			Code:    CodeNotAuthorized,
+			Message: fmt.Sprintf("Access to app '%s' (%s) denied: %s. %s", info.App, stage, reason, why),
+			Err:     cause,
 		}
 	}
 
@@ -671,7 +727,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		opened bool
 		denied *CrossAppAccessError
 	)
-	cfg := crossbar.Config{
+	cfg := wamp.Config{
 		SwarmKey:        f.swarmKey,
 		AppKey:          info.ProviderAppKey,
 		Stage:           appStage,
@@ -682,7 +738,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		FailOnAuthError: true,
 		Logger:          f.log,
 		OnAuthFailure: func(reason string) {
-			err := denial(reason, &crossbar.AuthError{Realm: realm, Reason: reason})
+			err := denial(reason, &wamp.AuthError{Realm: realm, Reason: reason})
 			mu.Lock()
 			denied = err
 			wasOpened := opened
@@ -715,7 +771,7 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		cctx, cancel := f.cleanupContext(ctx)
 		_ = conn.Stop(cctx)
 		cancel()
-		var aerr *crossbar.AuthError
+		var aerr *wamp.AuthError
 		if errors.As(err, &aerr) {
 			return nil, denial(aerr.Reason, err)
 		}
@@ -750,6 +806,23 @@ func (f *IronFlock) openFromInfo(ctx context.Context, info *ConsumedAppInfo, sta
 		log:             f.log,
 		cleanupTimeout:  f.cleanupTimeout,
 	}, nil
+}
+
+// legacyCredentialDenial explains a cross-app denial of a connection that
+// presented the legacy device credential.
+const legacyCredentialDenial = "Cross-app access needs the per-app credential the device agent injects " +
+	"(APP_AUTH_ID and APP_AUTH_SECRET); this app has none (an older device agent does not inject it), so it " +
+	"presented the legacy device credential, which another app's realm does not admit."
+
+// usesLegacyCredential reports whether the app's connections present the
+// legacy device credential (serial, serial): no WithCredentials pair and no
+// per-app credential injected.
+func (f *IronFlock) usesLegacyCredential() bool {
+	if f.authID != "" {
+		return false
+	}
+	id, secret := wamp.AppCredentials(f.serialNumber)
+	return id == f.serialNumber && secret == f.serialNumber
 }
 
 // safeCallback runs a user callback, recovering and logging a panic.

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 var bg = context.Background()
@@ -42,7 +43,7 @@ func TestPublishIsAcknowledgedAndCarriesDeviceMetadata(t *testing.T) {
 		Topic:  "test.topic",
 		Args:   []any{int64(42), "two"},
 		Kwargs: deviceMetadata(),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: 0, // a plain publish waits the default session timeout
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -69,6 +70,7 @@ func TestPublishSendsUnknownMetadataAsNil(t *testing.T) {
 	setIdentityEnv(t)
 	unsetEnv(t, "DEVICE_KEY", "DEVICE_NAME")
 	f := newTestFlock(t)
+	f.start(t)
 	if err := f.Publish(bg, "test.topic"); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestPublishToTableTargetsTheTableTopic(t *testing.T) {
 		Topic:  "10.20.sensordata",
 		Args:   []any{map[string]any{"temp": int64(22)}},
 		Kwargs: deviceMetadata(),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: DefaultReconnectWindow,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -233,7 +235,7 @@ func TestTableWritesNeedSwarmAndAppKey(t *testing.T) {
 
 func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(map[string]any{"success": true}), nil }
 	res, err := f.AppendToTable(bg, "sensordata", Row{"temperature": 21.5}, Kwargs{"batch": "b1"}, CallOptions{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +255,7 @@ func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 		t.Errorf("call %#v\nwant %#v", got, want)
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return nil, wampErr(crossbar.ErrURINoSuchProcedure) }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URINoSuchProcedure) }
 	_, err = f.AppendToTable(bg, "sensordata", Row{})
 	if want := "Append to table 'sensordata' failed with WAMP error 'wamp.error.no_such_procedure'"; err == nil || err.Error() != want {
 		t.Errorf("error %v, want %q", err, want)
@@ -263,7 +265,7 @@ func TestAppendToTableCallsTheAppendProcedure(t *testing.T) {
 func TestReconnectWindowOnlyForTableOperations(t *testing.T) {
 	for _, window := range []time.Duration{DefaultReconnectWindow, 0, 5 * time.Second} {
 		f := flock(t, WithReconnectWindow(window))
-		f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return &crossbar.Result{}, nil }
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return &wamp.Result{}, nil }
 		_ = f.PublishToTable(bg, "t", Row{})
 		_ = f.PublishRowsToTable(bg, "t", []Row{{}})
 		_, _ = f.AppendToTable(bg, "t", Row{})
@@ -271,7 +273,8 @@ func TestReconnectWindowOnlyForTableOperations(t *testing.T) {
 		_, _ = f.ReportError(bg, "x")
 		_, _ = f.ReportError(bg, "x", ReportErrorOptions{Append: true})
 		_, _ = f.GetHistory(bg, "t", nil)
-		_, _ = f.GetSeriesHistory(bg, "t", SeriesQueryParams{Method: MethodAvg, Limit: 1, TimeRange: &TimeRange{}})
+		_, _ = f.GetSeriesHistory(bg, "t", SeriesQueryParams{Metrics: []SeriesMetric{{"v", MethodAvg}}, Limit: 1,
+			TimeRange: &TimeRange{Start: int64(0)}})
 		_, _ = f.RevealSecrets(bg, "t", nil)
 		_, _ = f.VerifySecret(bg, "t", "c", "x", nil)
 		for _, p := range f.own.allPublishes() {
@@ -309,7 +312,7 @@ type sensorReading struct {
 
 func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) {
 		return resultOf(map[string]any{"success": true, "count": int64(2)}), nil
 	}
 	rows := []Row{{"temp": 22}, {"temp": 23}}
@@ -323,7 +326,7 @@ func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 		Topic:  "bulk.10.20.sensordata",
 		Args:   []any{wantRows},
 		Kwargs: withMetadata(map[string]any{"source": "plc"}),
-		Opts:   &crossbar.PublishOptions{Acknowledge: true},
+		Opts:   &wamp.PublishOptions{Acknowledge: true},
 		Window: DefaultReconnectWindow,
 	}
 	if !reflect.DeepEqual(pub, wantPub) {
@@ -358,7 +361,7 @@ func TestBulkWritesSendTheWholeBatchAsOneArgument(t *testing.T) {
 		t.Errorf("struct rows %#v", got)
 	}
 
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) {
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) {
 		return nil, wampErr("wamp.error.invalid_argument", "bad row")
 	}
 	_, err = f.AppendRowsToTable(bg, "sensordata", rows)
@@ -391,11 +394,12 @@ func (e tracedError) Error() string { return e.msg }
 
 // Format adds a stack trace for %+v, like github.com/pkg/errors does.
 func (e tracedError) Format(s fmt.State, verb rune) {
+	// A Formatter has no way to report a failed write.
 	if verb == 'v' && s.Flag('+') {
-		fmt.Fprintf(s, "%s\nmain.main\n\t/app/main.go:12", e.msg)
+		_, _ = fmt.Fprintf(s, "%s\nmain.main\n\t/app/main.go:12", e.msg)
 		return
 	}
-	fmt.Fprint(s, e.msg)
+	_, _ = fmt.Fprint(s, e.msg)
 }
 
 type stringer struct{}
@@ -431,7 +435,7 @@ func TestReportErrorPublishesAnAppTaggedRow(t *testing.T) {
 
 func TestReportErrorAppendUsesTheAppendProcedure(t *testing.T) {
 	f := flock(t)
-	f.own.callFn = func(fakeCall) (*crossbar.Result, error) { return resultOf(map[string]any{"success": true}), nil }
+	f.own.callFn = func(fakeCall) (*wamp.Result, error) { return resultOf(map[string]any{"success": true}), nil }
 	res, err := f.ReportError(bg, "kaboom", ReportErrorOptions{Append: true, Tsp: "2026-01-01T00:00:00.000Z"})
 	if err != nil {
 		t.Fatal(err)
@@ -505,7 +509,7 @@ func TestSubscribeToTableSubscribesBothFeeds(t *testing.T) {
 		defer mu.Unlock()
 		got = append(got, ev)
 	}
-	opts := SubscribeOptions{GetRetained: true}
+	opts := SubscribeOptions{Extra: map[string]any{"custom_option": true}}
 	ts, err := f.SubscribeToTable(bg, "sensordata", handler, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -514,10 +518,18 @@ func TestSubscribeToTableSubscribesBothFeeds(t *testing.T) {
 	if len(subs) != 2 || subs[0].Topic != "transformed.sensordata" || subs[1].Topic != "transformed.bulk.sensordata" {
 		t.Fatalf("subscriptions %#v", subs)
 	}
+	// Both feeds deliver through one DeliveryGroup, with the caller's
+	// options otherwise; the caller's options are left alone.
 	for _, s := range subs {
-		if !reflect.DeepEqual(s.Opts, &opts) {
+		if s.Opts == nil || !reflect.DeepEqual(s.Opts.Extra, opts.Extra) || s.Opts.Match != opts.Match {
 			t.Errorf("%s: options %#v", s.Topic, s.Opts)
 		}
+	}
+	if subs[0].Opts.Group == nil || subs[0].Opts.Group != subs[1].Opts.Group {
+		t.Errorf("delivery groups %p and %p, want one", subs[0].Opts.Group, subs[1].Opts.Group)
+	}
+	if opts.Group != nil {
+		t.Error("the caller's options were changed")
 	}
 	if ts.Rows != subs[0].Sub || ts.Bulk != subs[1].Sub {
 		t.Error("TableSubscription does not hold both subscriptions")
@@ -666,5 +678,121 @@ func TestSubscribe(t *testing.T) {
 	}
 	if _, err := f.Subscribe(bg, "t", nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("nil handler: %v", err)
+	}
+}
+
+// A DeliveryGroup the caller passes is the one both feeds deliver through.
+func TestSubscribeToTableUsesTheCallersDeliveryGroup(t *testing.T) {
+	f := flock(t)
+	group := wamp.NewDeliveryGroup()
+	if _, err := f.SubscribeToTable(bg, "sensordata", func(*Event) {}, SubscribeOptions{Group: group}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range f.own.allSubs() {
+		if s.Opts.Group != group {
+			t.Errorf("%s delivers through %p, want the caller's %p", s.Topic, s.Opts.Group, group)
+		}
+	}
+}
+
+// Once Unsubscribe has begun, the handler is called no more: not for the
+// rest of a bulk event being delivered, nor for an event that was queued
+// before the subscriptions were removed.
+func TestTableSubscriptionDeliversNothingOnceUnsubscribed(t *testing.T) {
+	f := flock(t)
+	var ts *TableSubscription
+	var got []any
+	ts, err := f.SubscribeToTable(bg, "sensordata", func(ev *Event) {
+		got = append(got, ev.Row()["n"])
+		if len(got) == 1 {
+			if err := ts.Unsubscribe(bg); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs := f.own.allSubs() // the handlers, as the connection holds them
+	subs[1].Handler(&Event{Args: []any{[]any{map[string]any{"n": int64(1)}, map[string]any{"n": int64(2)}}}})
+	subs[0].Handler(&Event{Args: []any{map[string]any{"n": int64(3)}}})
+	subs[1].Handler(&Event{Args: []any{[]any{map[string]any{"n": int64(4)}}}})
+	if !reflect.DeepEqual(got, []any{int64(1)}) {
+		t.Errorf("delivered %v, want only the row before Unsubscribe", got)
+	}
+}
+
+// NaN and ±Inf — say, a failed sensor read — are published alike whether
+// the row is a Row or a struct, as the Python and JavaScript SDKs send them
+// (msgpack float64).
+func TestPublishToTableSendsNonFiniteFloatsOfRowsAndStructsAlike(t *testing.T) {
+	type reading struct {
+		Temperature float64 `json:"temperature"`
+	}
+	f := flock(t)
+	for _, x := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := f.PublishToTable(bg, "sensordata", Row{"temperature": x}); err != nil {
+			t.Fatalf("Row with %v: %v", x, err)
+		}
+		if err := f.PublishToTable(bg, "sensordata", reading{Temperature: x}); err != nil {
+			t.Fatalf("struct with %v: %v", x, err)
+		}
+		pubs := f.own.allPublishes()
+		fromRow, fromStruct := pubs[len(pubs)-2], pubs[len(pubs)-1]
+		for _, p := range []fakePublish{fromRow, fromStruct} {
+			row, ok := p.Args[0].(map[string]any)
+			if !ok || len(row) != 1 {
+				t.Fatalf("%v: published %#v", x, p.Args)
+			}
+			if got, ok := row["temperature"].(float64); !ok || !(got == x || math.IsNaN(got) && math.IsNaN(x)) {
+				t.Errorf("%v: published %#v", x, row["temperature"])
+			}
+		}
+		if !reflect.DeepEqual(fromRow.Kwargs, fromStruct.Kwargs) || fromRow.Topic != fromStruct.Topic {
+			t.Errorf("%v: %#v and %#v", x, fromRow, fromStruct)
+		}
+	}
+}
+
+// fleetdb refuses a row it cannot store — a row without tsp, above all — with
+// a plain JavaScript Error on an append, which reaches the caller as
+// wamp.error.runtime_error without a reason (args [{}]): the error says what
+// to check.
+func TestAppendRefusedWithoutAReasonHintsAtTsp(t *testing.T) {
+	f := flock(t)
+	for _, args := range [][]any{{map[string]any{}}, {}, nil} {
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, wampErr(wamp.URIRuntimeError, args...) }
+		detail := ""
+		if len(args) > 0 {
+			detail = " — [{}]"
+		}
+		_, err := f.AppendToTable(bg, "sensordata", Row{"temperature": 23})
+		want := "Append to table 'sensordata' failed with WAMP error 'wamp.error.runtime_error'" + detail +
+			": the data backend refused the row without a reason — a missing tsp is the usual cause; see the error-logs table"
+		if err == nil || err.Error() != want {
+			t.Errorf("args %#v: %v\nwant %s", args, err, want)
+		}
+		if WampURI(err) != wamp.URIRuntimeError {
+			t.Errorf("the WAMP error is not reachable: %v", err)
+		}
+		_, err = f.AppendRowsToTable(bg, "sensordata", []Row{{"temperature": 1}, {"temperature": 2}})
+		want = "Bulk append of 2 row(s) to table 'sensordata' failed with WAMP error 'wamp.error.runtime_error'" + detail +
+			": the data backend refused the rows without a reason — a row without tsp is the usual cause; see the error-logs table"
+		if err == nil || err.Error() != want {
+			t.Errorf("bulk, args %#v: %v\nwant %s", args, err, want)
+		}
+	}
+	// Refusals that give a reason, or another URI, are shown as they are.
+	for _, werr := range []*WampError{
+		wampErr(wamp.URIRuntimeError, "boom"),
+		wampErr(wamp.URIRuntimeError, map[string]any{"name": "error", "code": "23505"}),
+		{URI: wamp.URIRuntimeError, Kwargs: map[string]any{"why": "x"}},
+		wampErr("sys.dataservice.error.storage_full", map[string]any{}),
+	} {
+		f.own.callFn = func(fakeCall) (*wamp.Result, error) { return nil, werr }
+		_, err := f.AppendToTable(bg, "sensordata", Row{"tsp": "2026-01-01T00:00:00Z"})
+		if err == nil || strings.Contains(err.Error(), "tsp") {
+			t.Errorf("%#v: %v", werr, err)
+		}
 	}
 }

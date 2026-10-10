@@ -1,0 +1,60 @@
+package authz
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"os"
+	"testing"
+
+	"github.com/ironflock/nexus/v3/wamp"
+
+	"github.com/ironflock/ironflock-auth/internal/store"
+)
+
+// TestContract evaluates the callouts in $AUTHZ_IN ([{session, uri, action,
+// options}]) with the real Policy.Decide over the harness's one device
+// (key 42, swarm 2) and writes {allow, cache_prefix} per request to $AUTHZ_OUT.
+func TestContract(t *testing.T) {
+	in, out := os.Getenv("AUTHZ_IN"), os.Getenv("AUTHZ_OUT")
+	if in == "" {
+		t.Skip("AUTHZ_IN not set")
+	}
+	data, err := os.ReadFile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reqs []struct {
+		Session map[string]any `json:"session"`
+		URI     string         `json:"uri"`
+		Action  string         `json:"action"`
+		Options map[string]any `json:"options"`
+	}
+	if err := json.Unmarshal(data, &reqs); err != nil {
+		t.Fatal(err)
+	}
+	p := &Policy{
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store: &fakeStore{devices: []store.Device{
+			{DeviceKey: 42, SwarmKey: 2, Serial: "06a0bf96-a539-4d6a-8471-ac7adc67616e"},
+		}},
+	}
+	res := []map[string]any{}
+	for _, r := range reqs {
+		args := wamp.List{wamp.Dict(r.Session), r.URI, r.Action, wamp.Dict(r.Options)}
+		req, err := ParseRequest(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := p.Decide(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res = append(res, map[string]any(v.Dict()))
+	}
+	b, _ := json.MarshalIndent(res, "", " ")
+	if err := os.WriteFile(out, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

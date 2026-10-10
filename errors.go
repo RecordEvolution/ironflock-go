@@ -1,12 +1,12 @@
 package ironflock
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // ErrInvalidArgument is wrapped by every error about invalid parameters
@@ -19,6 +19,10 @@ var ErrInvalidArgument = errors.New("ironflock: invalid argument")
 // into every app container; outside one, set them yourself (environment or
 // the With… options). Test with errors.Is.
 var ErrMissingConfig = errors.New("ironflock: missing configuration")
+
+// ErrAlreadyStarted is returned by Start, and by Run, on an IronFlock that is
+// started already or whose Start is still running.
+var ErrAlreadyStarted = errors.New("ironflock: Start called while already started")
 
 // sdkError is an error the SDK raises itself, before any router traffic: a
 // message classified by one or more of the sentinel errors above.
@@ -63,36 +67,44 @@ func isClientError(err error) bool {
 
 // OperationError reports a failed SDK operation. Op names the operation and
 // its target (e.g. "Publish to topic 'x'"); Err is the cause — a
-// *crossbar.WampError when the router or callee refused, which errors.As
-// finds through it.
+// *wamp.Error (WampError) when the router or callee refused, which
+// errors.As finds through it.
 type OperationError struct {
 	Op  string
 	Err error
 	// hint replaces the generic cause in the message when set.
 	hint string
+	// note follows the message when set.
+	note string
 }
 
 // Error implements error:
 //
-//	<Op> failed with WAMP error '<uri>'[ — <json args>]
+//	<Op> failed with WAMP error '<uri>'[ — <json args>][: <note>]
 //	<Op> failed: <hint or cause>
+//
+// The args are compact JSON as JavaScript's JSON.stringify writes it,
+// without escaping <, > and & (args JSON cannot encode, such as NaN, are
+// printed as Go values).
 func (e *OperationError) Error() string {
 	if e.hint != "" {
 		return fmt.Sprintf("%s failed: %s", e.Op, e.hint)
 	}
-	var werr *crossbar.WampError
+	var msg string
+	var werr *wamp.Error
 	if errors.As(e.Err, &werr) {
 		detail := ""
 		if len(werr.Args) > 0 {
-			if data, err := json.Marshal(werr.Args); err == nil {
-				detail = " — " + string(data)
-			} else {
-				detail = fmt.Sprintf(" — %v", werr.Args)
-			}
+			detail = " — " + jsontext.Compact(werr.Args)
 		}
-		return fmt.Sprintf("%s failed with WAMP error '%s'%s", e.Op, werr.URI, detail)
+		msg = fmt.Sprintf("%s failed with WAMP error '%s'%s", e.Op, werr.URI, detail)
+	} else {
+		msg = fmt.Sprintf("%s failed: %v", e.Op, e.Err)
 	}
-	return fmt.Sprintf("%s failed: %v", e.Op, e.Err)
+	if e.note != "" {
+		msg += ": " + e.note
+	}
+	return msg
 }
 
 // Unwrap returns the cause.
@@ -101,12 +113,79 @@ func (e *OperationError) Unwrap() error { return e.Err }
 // WampURI returns the WAMP error URI behind err, or "" when err is not a
 // router or callee refusal.
 func WampURI(err error) string {
-	var werr *crossbar.WampError
+	var werr *wamp.Error
 	if errors.As(err, &werr) {
 		return werr.URI
 	}
 	return ""
 }
+
+// Refusals of the data backend (fleetdb). An operation it refuses fails with
+// an *OperationError around a *WampError carrying one of these URIs (and the
+// reason as its first argument): branch on WampURI(err). The SDK retries
+// none of them.
+const (
+	// URIRateLimited: RevealSecrets beyond 30, or VerifySecret beyond 120,
+	// calls a minute, counted per app credential on a device (and per data
+	// backend process) in a fixed one-minute window. Reveal a secret once
+	// and keep it rather than on every use; cache the outcome of a
+	// per-request VerifySecret briefly.
+	URIRateLimited = "sys.dataservice.error.rate_limited"
+	// URIResultTooLarge: a read whose result cannot be transported: a single
+	// row over the data backend's 8 MiB message budget, or a result over its
+	// runaway guard (1 GiB). (Larger results arrive in chunks, which the
+	// read methods reassemble.) Its Kwargs carry bytes, rows, limitBytes and
+	// topColumns: lower Limit, narrow TimeRange, select fewer Columns, or
+	// prune json columns with ColumnPaths.
+	URIResultTooLarge = "sys.dataservice.error.result_too_large"
+	// URIInvalidLimit: a read of a transform with a Limit over 3000.
+	URIInvalidLimit = "sys.dataservice.error.invalid_limit"
+	// URIInvalidTimeRange: a series query whose time range has no start, or
+	// an end that is not after its start.
+	URIInvalidTimeRange = "sys.dataservice.error.invalid_time_range"
+	// URIInvalidMetric: a series metric the table cannot aggregate: a ref
+	// that is no column of the table (or a path into a column that is not
+	// json), a secret column, a method the column's type does not take, tsp
+	// with another method than COUNT, or a column name over 63 bytes.
+	URIInvalidMetric = "sys.dataservice.error.invalid_metric"
+	// URIInvalidGroupBy: a series GroupBy column the table cannot group by:
+	// no column of the table, a secret column, tsp, a column that is also a
+	// metric, or a name over 63 bytes.
+	URIInvalidGroupBy = "sys.dataservice.error.invalid_group_by"
+	// URISeriesTooManyGroups: a series result over 50,000 rows (buckets times
+	// groups): fewer buckets, a narrower time range, or a GroupBy of fewer
+	// distinct values.
+	URISeriesTooManyGroups = "sys.dataservice.error.series_too_many_groups"
+	// URISecretColumn: a read (GetHistory, GetSeriesHistory, RevealSecrets,
+	// VerifySecret) that filters on a secret column, whose stored values no
+	// predicate can match. Use VerifySecret to test a value.
+	URISecretColumn = "sys.dataservice.error.secret_column"
+	// URINotASecretColumn: VerifySecret with a column that is not a secret
+	// column, or RevealSecrets of a table that has no secret column.
+	URINotASecretColumn = "sys.dataservice.error.not_a_secret_column"
+	// URIStorageFull: an append refused because the appliance's disk is
+	// nearly full (below about 3 GiB free; writes are accepted again from
+	// 4 GiB). Temporary, nothing stored is lost: hold the rows and append
+	// them later. A published row refused for this is dropped without a
+	// word to the publisher; only appends report it.
+	URIStorageFull = "sys.dataservice.error.storage_full"
+	// URIStorageOverusage: an append refused because the account's storage
+	// allowance is used up; retrying soon does not help. Published rows are
+	// dropped likewise without a word.
+	URIStorageOverusage = "sys.dataservice.error.storage_overusage"
+	// URIEntityKeyConflict: a write of a row whose entity key
+	// (maintainLatestFlagFor) and tsp another row has already — in the same
+	// batch (one stamped with one tsp, say) or stored before. Give every row
+	// its own tsp.
+	URIEntityKeyConflict = "sys.dataservice.error.entity_key_conflict"
+	// URISecretSentinelUnresolvable: a write that keeps a secret column's
+	// previous value (it sends SecretPlaceholder) to a table without an entity
+	// key to find that value by, or without that key in the row.
+	URISecretSentinelUnresolvable = "sys.dataservice.error.secret_sentinel_unresolvable"
+	// URISecretCiphertextRejected: a write of a value that is already
+	// encrypted (read back raw, say) to a secret column: send the plaintext.
+	URISecretCiphertextRejected = "sys.dataservice.error.secret_ciphertext_rejected"
+)
 
 // operationFailed wraps err for operation op, leaving client-side errors
 // (invalid argument, missing configuration) and cross-app errors as they are.
@@ -192,16 +271,17 @@ var crossAppCodes = map[string]string{
 	"sys.appaccess.error.no_grant":               CodeNoGrant,
 	"sys.appaccess.error.provider_not_installed": CodeProviderNotInstalled,
 	"sys.appaccess.error.unknown_app":            CodeUnknownApp,
-	crossbar.ErrURINotAuthorized:                 CodeNotAuthorized,
-	crossbar.ErrURIAuthorizationFailed:           CodeNotAuthorized,
-	crossbar.ErrURIAuthenticationFail:            CodeNotAuthorized,
+	wamp.URINotAuthorized:                        CodeNotAuthorized,
+	wamp.URIAuthorizationFailed:                  CodeNotAuthorized,
+	wamp.URIAuthenticationFailed:                 CodeNotAuthorized,
 }
 
 // mapCrossAppError maps a WAMP refusal to a *CrossAppAccessError, or returns
 // nil when the URI is not a cross-app access condition. The message is the
-// URI followed by ": <json of the first error argument>", if any.
+// URI followed by ": <json of the first error argument>", if any, in compact
+// JSON without HTML escaping, as the Python and JavaScript SDKs write it.
 func mapCrossAppError(err error) *CrossAppAccessError {
-	var werr *crossbar.WampError
+	var werr *wamp.Error
 	if !errors.As(err, &werr) {
 		return nil
 	}
@@ -211,11 +291,7 @@ func mapCrossAppError(err error) *CrossAppAccessError {
 	}
 	msg := werr.URI
 	if len(werr.Args) > 0 {
-		if data, jerr := json.Marshal(werr.Args[0]); jerr == nil {
-			msg += ": " + string(data)
-		} else {
-			msg += fmt.Sprintf(": %v", werr.Args[0])
-		}
+		msg += ": " + jsontext.Compact(werr.Args[0])
 	}
 	return &CrossAppAccessError{Code: code, Message: msg, Err: err}
 }

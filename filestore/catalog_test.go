@@ -113,6 +113,24 @@ func TestNamespaceWithoutPrivateFlagIsShared(t *testing.T) {
 	}
 }
 
+// fleetfiles reports a namespace that accepts any type as ["*/*"], and the
+// default object cap of 100 MiB, as it resolves the data template: they
+// arrive as reported (see NamespaceInfo).
+func TestNamespaceAsTheServiceResolvesIt(t *testing.T) {
+	fs, _ := newStore(t, map[string]any{URINamespaces: ok(map[string]any{
+		"namespaces": []any{map[string]any{"name": "default", "description": "", "private": false,
+			"content_types": []any{"*/*"}, "max_object_bytes": int64(104857600)}},
+	})})
+	ns, err := fs.Namespaces(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []NamespaceInfo{{Name: "default", ContentTypes: []string{"*/*"}, MaxObjectBytes: 100 << 20}}
+	if !reflect.DeepEqual(ns, want) {
+		t.Errorf("namespaces = %+v, want %+v", ns, want)
+	}
+}
+
 // The object store enforces one budget per bucket; a namespace has no quota
 // of its own, even when the payload sends one.
 func TestNamespacesCarryNoQuota(t *testing.T) {
@@ -245,6 +263,154 @@ func TestRefreshCatalog(t *testing.T) {
 	}
 	if c, err := fs.Catalog(ctx); err != nil || c.SadKey != 9 {
 		t.Errorf("Catalog after a failed refresh = %+v, %v", c, err)
+	}
+}
+
+// fakeClock is a FileStore's clock under a test's control.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock(fs *FileStore) *fakeClock {
+	c := &fakeClock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	fs.now = c.now
+	return c
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// cloudCatalog is the catalog of an appliance whose cloud-share toggle
+// reports base ("" while the toggle is off).
+func cloudCatalog(base string) map[string]any {
+	return ok(catalogPayload(map[string]any{"cloud_base_url": base}))
+}
+
+// The cloud tunnel base follows the data backend's cloud-share toggle,
+// which the user switches at runtime (fleetfiles computes cloud_base_url on
+// every catalog call; its edge answers 404 while the toggle is off).
+// CloudURL re-reads a catalog older than 30 s; the paths that need only the
+// catalog's lasting fields (URL, Put, the URLs on descriptors, Catalog) keep
+// using the cached one, whatever its age.
+func TestCloudURLFollowsTheToggle(t *testing.T) {
+	ctx := context.Background()
+	fs, fc := newStore(t, map[string]any{
+		URINamespaces: cloudCatalog(""),
+		URIPut:        ok(map[string]any{"namespace": "default", "key": "a.jpg", "size": int64(1)}),
+		URIStat:       ok(map[string]any{"namespace": "default", "key": "a.jpg", "size": int64(1)}),
+	})
+	clock := newFakeClock(fs)
+	cloudURL := func(want string, fetches int) {
+		t.Helper()
+		got, err := fs.CloudURL(ctx, "a.jpg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("CloudURL = %q, want %q", got, want)
+		}
+		if n := fc.count(URINamespaces); n != fetches {
+			t.Errorf("catalog fetched %d times, want %d", n, fetches)
+		}
+	}
+	const on = "https://i7-files.cloud.test/f/3317/default/a.jpg"
+
+	cloudURL("", 1) // toggle off
+	fc.set(URINamespaces, cloudCatalog("https://i7-files.cloud.test"))
+	clock.advance(29 * time.Second)
+	cloudURL("", 1) // within 30 s: the cached answer, no call
+	clock.advance(2 * time.Second)
+	cloudURL(on, 2) // switched on, seen
+
+	// The lasting fields never expire.
+	clock.advance(time.Hour)
+	if _, err := fs.URL(ctx, "a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Put(ctx, "a.jpg", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Stat(ctx, "a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := fs.Catalog(ctx); err != nil || c.CloudBaseURL != "https://i7-files.cloud.test" {
+		t.Fatalf("Catalog = %+v, %v", c, err)
+	}
+	if n := fc.count(URINamespaces); n != 2 {
+		t.Errorf("catalog fetched %d times, want 2: only CloudURL re-reads it", n)
+	}
+
+	fc.set(URINamespaces, cloudCatalog(""))
+	cloudURL("", 3) // switched off, seen: no link the edge would answer 404
+	if c, _ := fs.Catalog(ctx); c.CloudBaseURL != "" {
+		t.Errorf("Catalog after CloudURL's re-read: CloudBaseURL = %q, want the new value", c.CloudBaseURL)
+	}
+
+	// A failed re-read is the answer; the cached catalog stays for the rest.
+	clock.advance(31 * time.Second)
+	down := errors.New("down")
+	fc.set(URINamespaces, down)
+	if _, err := fs.CloudURL(ctx, "a.jpg"); !errors.Is(err, down) {
+		t.Errorf("CloudURL with the catalog unreadable: err = %v, want %v", err, down)
+	}
+	if u, err := fs.URL(ctx, "a.jpg"); err != nil || u != "https://files.ironflock.com/f/3317/default/a.jpg" {
+		t.Errorf("URL with the catalog unreadable = %q, %v", u, err)
+	}
+	fc.set(URINamespaces, cloudCatalog("https://i7-files.cloud.test"))
+	cloudURL(on, 5) // the next call tries again
+}
+
+// Concurrent CloudURL calls on an expired catalog share one re-read.
+func TestCloudURLRereadOnceUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	fs, fc := newStore(t, map[string]any{URINamespaces: cloudCatalog("")})
+	clock := newFakeClock(fs)
+	if _, err := fs.CloudURL(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(time.Minute)
+	release := make(chan struct{})
+	var fetches atomic.Int32
+	fc.set(URINamespaces, replyFunc(func([]any) (any, error) {
+		fetches.Add(1)
+		<-release
+		return cloudCatalog("https://i7-files.cloud.test"), nil
+	}))
+	var wg sync.WaitGroup
+	urls := make(chan string, 10)
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			u, err := fs.CloudURL(ctx, "a")
+			if err != nil {
+				t.Error(err)
+			}
+			urls <- u
+		}()
+	}
+	waitFor(t, func() bool { return fetches.Load() == 1 })
+	time.Sleep(10 * time.Millisecond) // let the other calls queue up behind the re-read
+	close(release)
+	wg.Wait()
+	close(urls)
+	for u := range urls {
+		if u != "https://i7-files.cloud.test/f/3317/default/a" {
+			t.Errorf("CloudURL = %q", u)
+		}
+	}
+	if n := fc.count(URINamespaces); n != 2 {
+		t.Errorf("catalog fetched %d times, want 2", n)
 	}
 }
 

@@ -1,29 +1,26 @@
 package filestore
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
-	"github.com/RecordEvolution/ironflock-go/crossbar"
+	"github.com/RecordEvolution/ironflock-go/internal/jsontext"
+	"github.com/RecordEvolution/ironflock-go/wamp"
 )
 
 // errNoCaller is returned by every call of a FileStore built without a
 // Caller.
 var errNoCaller = errors.New("filestore: no connection to call the file service through")
 
-// wampErrorCodes maps router-level rejections — which, unlike service
-// failures, do arrive as WAMP errors — to file error codes.
-// no_such_procedure means the deployment has no file service (or one older
-// than the data plane), which an app must be able to tell apart from "you
-// may not do this".
+// wampErrorCodes maps the authorization refusals of the router — which,
+// unlike service failures, arrive as WAMP errors — to file error codes. The
+// refusals of a call the file service does not serve (yet) are told by
+// wamp.IsNotServedYet (see mapWampError).
 var wampErrorCodes = map[string]string{
-	crossbar.ErrURINoSuchProcedure:     CodeNotAvailable,
-	crossbar.ErrURINotAuthorized:       CodeNotAuthorized,
-	crossbar.ErrURIAuthorizationFailed: CodeNotAuthorized,
-	crossbar.ErrURIAuthenticationFail:  CodeNotAuthorized,
+	wamp.URINotAuthorized:        CodeNotAuthorized,
+	wamp.URIAuthorizationFailed:  CodeNotAuthorized,
+	wamp.URIAuthenticationFailed: CodeNotAuthorized,
 }
 
 // call calls a file service procedure and unwraps the response envelope
@@ -31,13 +28,13 @@ var wampErrorCodes = map[string]string{
 //
 // payload is sent as the single positional argument; nil sends no
 // arguments. No retry window is passed: the call waits for the session for
-// the connection's default time and is not retried, so a missing procedure
-// is reported at once as CodeNotAvailable.
+// the connection's default time and is not retried, so a procedure the file
+// service does not serve (yet) is reported at once as CodeNotAvailable.
 //
 // Failures the service reports in the envelope are returned as *Error with
 // the code passed through verbatim (CodeInternal when absent). Router
 // rejections are mapped by mapWampError; every other error (no session,
-// cancelled context, an unmapped WAMP error as *crossbar.WampError) is
+// cancelled context, an unmapped WAMP error as *wamp.Error) is
 // returned unchanged. A successful call returns the envelope's payload, or
 // an empty map when it has none.
 func (s *FileStore) call(ctx context.Context, uri string, payload map[string]any) (map[string]any, error) {
@@ -77,41 +74,43 @@ func (s *FileStore) call(ctx context.Context, uri string, payload map[string]any
 	return map[string]any{}, nil
 }
 
-// mapWampError maps a router-level rejection (a *crossbar.WampError anywhere
-// in err's chain) with one of the URIs in wampErrorCodes to an *Error, or
-// returns nil when err is not such a rejection (or is already an *Error).
-// The reason carries the first error argument, JSON-encoded, as detail.
+// mapWampError maps a router-level rejection (a *wamp.Error anywhere in
+// err's chain) to an *Error, or returns nil when err is not such a rejection
+// (or is already an *Error):
+//
+//   - a call the file service does not serve (yet), as wamp.IsNotServedYet
+//     tells it, is CodeNotAvailable: the router's no_such_procedure (no file
+//     service on this deployment, or it has not registered again after a
+//     restart), or the invalid_argument "client has no handler for
+//     registration …" its WAMP client answers a call that overtook a
+//     registration (fleetfiles registers its procedures anew whenever it
+//     binds a data backend). Such a call reached no handler. It is not
+//     retried, as in the Python SDK: the app sees the code;
+//   - an authorization refusal (see wampErrorCodes) is CodeNotAuthorized.
+//
+// The reason carries the first error argument as detail, in compact JSON
+// like JavaScript's JSON.stringify (no HTML escaping).
 func mapWampError(err error) *Error {
 	var fe *Error
 	if errors.As(err, &fe) {
 		return nil // already a file error
 	}
-	var we *crossbar.WampError
+	var we *wamp.Error
 	if !errors.As(err, &we) || we == nil {
-		return nil
-	}
-	code, ok := wampErrorCodes[we.URI]
-	if !ok {
 		return nil
 	}
 	detail := ""
 	if len(we.Args) > 0 {
-		detail = ": " + jsonDetail(we.Args[0])
+		detail = ": " + jsontext.Compact(we.Args[0])
 	}
-	if code == CodeNotAvailable {
-		return wrapError(code, "the file service is not available on this deployment"+detail, err)
+	if wamp.IsNotServedYet(err) {
+		if we.URI == wamp.URINoSuchProcedure {
+			return wrapError(CodeNotAvailable, "the file service is not available on this deployment"+detail, err)
+		}
+		return wrapError(CodeNotAvailable, "the file service did not take the call: it is still registering its procedures"+detail, err)
 	}
-	return wrapError(code, we.URI+detail, err)
-}
-
-// jsonDetail renders v as compact JSON (like JavaScript's JSON.stringify:
-// no HTML escaping), falling back to %v for values JSON cannot encode.
-func jsonDetail(v any) string {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return fmt.Sprintf("%v", v)
+	if code, ok := wampErrorCodes[we.URI]; ok {
+		return wrapError(code, we.URI+detail, err)
 	}
-	return string(bytes.TrimRight(buf.Bytes(), "\n"))
+	return nil
 }

@@ -10,10 +10,13 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -278,7 +281,8 @@ func TestPresignUnreachable(t *testing.T) {
 	ctx := context.Background()
 	check := func(t *testing.T, err error) {
 		t.Helper()
-		fe := wantError(t, err, CodePresignUnreachable, "")
+		wantError(t, err, CodePresignUnreachable, "")
+		fe := fileError(t, err)
 		if !strings.HasPrefix(fe.Reason, "could not reach the object store directly (") ||
 			!strings.HasSuffix(fe.Reason, "); a proxy may allow only the router") {
 			t.Errorf("reason = %q", fe.Reason)
@@ -740,6 +744,120 @@ func TestHTTPClient(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// persistConnGoroutines counts the goroutines net/http runs for its pooled
+// client connections (a read and a write loop per connection).
+func persistConnGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "net/http.(*persistConn)") {
+			n++
+		}
+	}
+	return n
+}
+
+// connCounter counts the connections an HTTP server accepts and closes.
+type connCounter struct{ opened, closed atomic.Int32 }
+
+func (c *connCounter) track(_ net.Conn, state http.ConnState) {
+	switch state {
+	case http.StateNew:
+		c.opened.Add(1)
+	case http.StateClosed, http.StateHijacked:
+		c.closed.Add(1)
+	}
+}
+
+// idleCloseRecorder is a caller's transport that records being told to
+// close its idle connections (and does so).
+type idleCloseRecorder struct {
+	*http.Transport
+	calls atomic.Int32
+}
+
+func (r *idleCloseRecorder) CloseIdleConnections() {
+	r.calls.Add(1)
+	r.Transport.CloseIdleConnections()
+}
+
+// The store's own client pools keep-alive connections, each with two
+// goroutines that would otherwise outlive the app by up to 90 s.
+// CloseIdleConnections (which IronFlock.Stop calls) releases them, while
+// the object store is still up; a client the caller passed in is not
+// touched.
+func TestCloseIdleConnections(t *testing.T) {
+	// storeOn returns a store whose Get of "big.bin" downloads from srv.
+	storeOn := func(srv *httptest.Server, client *http.Client) *FileStore {
+		return New(newFakeCaller(map[string]any{
+			URIGet:     fail(CodeTooLarge, "too big"),
+			URIReadURL: ok(map[string]any{"url": srv.URL + "/big.bin"}),
+		}), client)
+	}
+	// server starts an object store that counts its connections.
+	server := func(t *testing.T) (*httptest.Server, *connCounter) {
+		conns := &connCounter{}
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(respondWith(http.StatusOK, "payload")))
+		srv.Config.ConnState = conns.track
+		srv.Start()
+		t.Cleanup(srv.Close)
+		return srv, conns
+	}
+	get := func(t *testing.T, fs *FileStore) {
+		t.Helper()
+		if data, err := fs.Get(context.Background(), "big.bin"); err != nil || string(data) != "payload" {
+			t.Fatalf("Get = %q, %v", data, err)
+		}
+	}
+
+	t.Run("own client", func(t *testing.T) {
+		if !eventually(func() bool { return persistConnGoroutines() == 0 }) {
+			t.Fatalf("%d pooled-connection goroutines of earlier tests did not wind down", persistConnGoroutines())
+		}
+		srv, conns := server(t)
+		fs := storeOn(srv, nil)
+		get(t, fs)
+		if persistConnGoroutines() == 0 {
+			t.Fatal("no pooled connection after a direct transfer: nothing to release")
+		}
+		fs.CloseIdleConnections()
+		if !eventually(func() bool { return persistConnGoroutines() == 0 }) {
+			t.Errorf("%d pooled-connection goroutines still running after CloseIdleConnections", persistConnGoroutines())
+		}
+		if !eventually(func() bool { return conns.closed.Load() == conns.opened.Load() }) {
+			t.Errorf("object store: %d connections opened, %d closed", conns.opened.Load(), conns.closed.Load())
+		}
+		// The store stays usable.
+		get(t, fs)
+		fs.CloseIdleConnections()
+	})
+
+	t.Run("caller's client is left alone", func(t *testing.T) {
+		srv, conns := server(t)
+		inner := &http.Transport{}
+		t.Cleanup(inner.CloseIdleConnections)
+		rec := &idleCloseRecorder{Transport: inner}
+		fs := storeOn(srv, &http.Client{Transport: rec})
+		get(t, fs)
+		fs.CloseIdleConnections()
+		if n := rec.calls.Load(); n != 0 {
+			t.Errorf("the caller's transport was told %d times to close its idle connections", n)
+		}
+		get(t, fs)
+		if n := conns.opened.Load(); n != 1 {
+			t.Errorf("%d connections for two transfers, want 1: the caller's pooled connection was not reused", n)
+		}
+	})
+}
 
 // The source of an upload is not read once the upload has returned, even if
 // the transport still holds the request body.

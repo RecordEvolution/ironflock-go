@@ -10,8 +10,10 @@ import (
 	ironflock "github.com/RecordEvolution/ironflock-go"
 )
 
+// Reading is a row of the "sensordata" table; columns are matched by the json
+// tags. The data backend returns timestamps as epoch milliseconds.
 type Reading struct {
-	Tsp         string  `json:"tsp"`
+	Tsp         int64   `json:"tsp"`
 	DeviceKey   int     `json:"device_key"`
 	Temperature float64 `json:"temperature"`
 }
@@ -44,7 +46,7 @@ func main() {
 			return err
 		}
 		for _, r := range readings {
-			log.Printf("device %d: %.1f°C at %s", r.DeviceKey, r.Temperature, r.Tsp)
+			log.Printf("device %d: %.1f°C at %s", r.DeviceKey, r.Temperature, time.UnixMilli(r.Tsp).UTC())
 		}
 
 		// The last day, warm readings only.
@@ -59,17 +61,24 @@ func main() {
 		}
 		log.Printf("%d warm readings", len(warm))
 
-		// Hourly averages for a chart.
+		// Hourly averages for a chart: one row per hour, its start in tsp
+		// (epoch ms), the average under "AVG:temperature". The range holds
+		// exactly Limit buckets; one any longer (an open end, which the data
+		// backend reads as its own now) would make it widen the buckets.
+		now := time.Now()
+		avg := ironflock.SeriesMetric{Ref: "temperature", Method: ironflock.MethodAvg}
 		series, err := ifl.GetSeriesHistory(ctx, "sensordata", ironflock.SeriesQueryParams{
-			Metrics:   []string{"temperature"},
-			Method:    ironflock.MethodAvg,
+			Metrics:   []ironflock.SeriesMetric{avg},
+			Bucket:    time.Hour,
 			Limit:     24,
-			TimeRange: ironflock.Since(time.Now().Add(-24 * time.Hour)),
+			TimeRange: ironflock.Between(now.Add(-24*time.Hour), now),
 		})
 		if err != nil {
 			return err
 		}
-		log.Printf("series: %v", series)
+		for _, bucket := range series {
+			log.Printf("hour starting %v: %v", bucket["tsp"], bucket[avg.Column()])
+		}
 
 		<-ctx.Done() // keep streaming until SIGINT/SIGTERM
 		return nil

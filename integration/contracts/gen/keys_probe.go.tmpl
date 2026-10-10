@@ -1,0 +1,40 @@
+// Runs fleetfiles' naming.NormalizeKey over a JSON list of keys and prints
+// [{key, ok, normalized | error}]. regen.sh builds it in a scratch module
+// next to a copy of internal/naming/naming.go.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"namingprobe/naming"
+)
+
+func main() {
+	data, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	var keys []string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		panic(err)
+	}
+	type verdict struct {
+		Key        string `json:"key"`
+		OK         bool   `json:"ok"`
+		Normalized string `json:"normalized,omitempty"`
+		Error      string `json:"error,omitempty"`
+	}
+	out := []verdict{}
+	for _, k := range keys {
+		n, err := naming.NormalizeKey(k)
+		v := verdict{Key: k, OK: err == nil, Normalized: n}
+		if err != nil {
+			v.Error = err.Error()
+		}
+		out = append(out, v)
+	}
+	enc, _ := json.MarshalIndent(out, "", " ")
+	fmt.Println(string(enc))
+}
